@@ -1,22 +1,24 @@
 import pg from 'pg';
 const { Pool } = pg;
 
+// Pool configuration
 const POOL_CONFIG = {
   max: 20,
   idleTimeoutMillis: 30000,
-  connectionTimeoutMillis: 2000
+  connectionTimeoutMillis: 2000,
+  ssl: false
 };
 
 let pool;
 
 async function createPool() {
-  console.log('📝 Creating database pool with configuration:', {
+  // Log database configuration (excluding sensitive data)
+  console.log('Database configuration:', {
     host: `/cloudsql/${process.env.INSTANCE_CONNECTION_NAME}`,
     database: process.env.DB_NAME,
-    user: process.env.DB_USER,
-    max: POOL_CONFIG.max,
-    idleTimeoutMillis: POOL_CONFIG.idleTimeoutMillis,
-    connectionTimeoutMillis: POOL_CONFIG.connectionTimeoutMillis
+    hasUser: !!process.env.DB_USER,
+    hasPassword: !!process.env.DB_PASSWORD,
+    timestamp: new Date().toISOString()
   });
 
   return new Pool({
@@ -30,18 +32,25 @@ async function createPool() {
 
 async function testConnection() {
   try {
-    console.log('🔄 Testing database connection...');
     const client = await pool.connect();
     try {
-      await client.query('SELECT NOW()');
-      console.log('✅ Database connection test successful');
+      const result = await client.query('SELECT current_database() as db_name');
+      console.log('Database connection verified:', {
+        database: result.rows[0].db_name,
+        poolSize: pool.totalCount,
+        timestamp: new Date().toISOString()
+      });
+      console.log('Database connection established');
       return true;
     } finally {
       client.release();
     }
   } catch (error) {
-    console.error('❌ Database connection test failed:', error.message, '\nError details:', error);
-    throw error;
+    console.error('Database query error:', {
+      error: error.message,
+      timestamp: new Date().toISOString()
+    });
+    throw new Error('Failed to initialize database: ' + error.message);
   }
 }
 
