@@ -1,9 +1,13 @@
 # Nifya Subscription Worker
 
-A Cloud Run service that processes subscription events from Pub/Sub and handles content analysis for DOGA and BOE sources.
+A Cloud Run service that processes subscription events from Pub/Sub and handles content analysis for DOGA and BOE sources. The service initializes with secure database connections and proper secret management.
 
 ## 🚀 Features
 
+- **Secure Initialization**:
+  - Secret Manager integration for credentials
+  - Robust database connection pooling
+  - Graceful shutdown handling
 - **Real-time Processing**: Immediate processing of new subscriptions
 - **Content Sources**:
   - DOGA (Diario Oficial de Galicia)
@@ -15,8 +19,9 @@ A Cloud Run service that processes subscription events from Pub/Sub and handles 
 ## 🏗 Project Structure
 
 ```
-.
 ├── src/
+│   ├── config.js           # Secret Manager configuration
+│   ├── database.js         # Database pool management
 │   ├── database/
 │   │   └── client.js         # PostgreSQL database client
 │   ├── handlers/
@@ -36,32 +41,61 @@ A Cloud Run service that processes subscription events from Pub/Sub and handles 
 ## 🛠 Tech Stack
 
 - **Runtime**: Node.js
-- **Framework**: Express.js
+- **Framework**: Express.js 4.x
 - **Database**: PostgreSQL
 - **Cloud Services**:
   - Google Cloud Run
   - Cloud Pub/Sub
   - Cloud SQL
+  - Secret Manager
 
-## 🔧 Configuration
+## 🔧 Initialization Process
 
-Environment variables required for operation:
+The service follows a strict initialization sequence to ensure reliable operation:
 
-```bash
-# Database
-DB_NAME=nifya
-DB_USER=nifya
-DB_PASSWORD=your-password-here
+1. **Secret Loading** (`config.js`):
+   - Connects to Google Secret Manager
+   - Retrieves database credentials:
+     - DB_NAME
+     - DB_USER
+     - DB_PASSWORD
+   - Sets environment variables securely
 
-# Service URLs
-DOGA_PARSER_URL=https://doga-parser-415554190254.us-central1.run.app
-BOE_PARSER_URL=https://boe-parser.example.com
+2. **Database Initialization** (`database.js`):
+   - Creates connection pool with:
+     - Max 20 clients
+     - 30-second idle timeout
+     - 2-second connection timeout
+   - Implements retry logic (5 attempts)
+   - Sets up event listeners for monitoring
+   - Validates connection with test query
 
-# Google Cloud
-GOOGLE_CLOUD_PROJECT=your-project-id
-INSTANCE_CONNECTION_NAME=your-instance-connection
-PUBSUB_TOPIC=notifications
-PORT=8080
+3. **Server Setup** (`server.js`):
+   - Initializes Express application
+   - Sets up Pub/Sub client
+   - Configures subscription event endpoint
+   - Establishes graceful shutdown handlers
+
+4. **Error Handling**:
+   - Comprehensive error logging
+   - Automatic retry mechanisms
+   - Graceful degradation
+
+## 🔐 Required Secrets
+
+The following secrets must be configured in Secret Manager:
+
+- `DB_NAME`: Database name
+- `DB_USER`: Database username
+- `DB_PASSWORD`: Database password
+
+## 🔌 Database Connection
+
+Connects to Cloud SQL using Unix socket:
+```
+Host: /cloudsql/delta-entity-447812-p2:us-central1:nifya-db
+Database: nifya
+SSL: disabled (Unix socket)
 ```
 
 ## 📦 Installation
@@ -131,16 +165,31 @@ Logs use emoji prefixes for better visual scanning:
 ## 🚀 Deployment
 
 ```bash
-# Build the container
-gcloud builds submit --tag gcr.io/PROJECT_ID/nifya-subscription-worker
-
-# Deploy to Cloud Run
+# Build and deploy to Cloud Run
 gcloud run deploy nifya-subscription-worker \
-  --image gcr.io/PROJECT_ID/nifya-subscription-worker \
+  --source . \
   --platform managed \
   --region us-central1 \
-  --allow-unauthenticated
+  --set-secrets=DB_NAME=DB_NAME:latest,DB_USER=DB_USER:latest,DB_PASSWORD=DB_PASSWORD:latest \
+  --set-cloudsql-instances=delta-entity-447812-p2:us-central1:nifya-db
 ```
+
+## 🔄 Startup Sequence
+
+1. Service starts with `npm start`
+2. Loads secrets from Secret Manager
+3. Initializes database connection pool
+4. Sets up Express server and Pub/Sub
+5. Begins listening for events
+
+## 🛑 Shutdown Process
+
+The service implements graceful shutdown:
+
+1. Captures SIGTERM/SIGINT signals
+2. Closes database connections
+3. Completes pending operations
+4. Exits cleanly
 
 ## 🔍 Health Check
 
