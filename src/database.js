@@ -1,28 +1,36 @@
 import pg from 'pg';
 const { Pool } = pg;
 
-let pool;
-
-const RETRY_LIMIT = 5;
-const RETRY_DELAY = 1000; // 1 second
 const POOL_CONFIG = {
-  max: 20, // Maximum number of clients in the pool
-  idleTimeoutMillis: 30000, // Close idle clients after 30 seconds
-  connectionTimeoutMillis: 2000, // Return an error after 2 seconds if connection could not be established
+  max: 20,
+  idleTimeoutMillis: 30000,
+  connectionTimeoutMillis: 2000
 };
 
+let pool;
+
 async function createPool() {
+  console.log('📝 Creating database pool with configuration:', {
+    host: `/cloudsql/${process.env.INSTANCE_CONNECTION_NAME}`,
+    database: process.env.DB_NAME,
+    user: process.env.DB_USER,
+    max: POOL_CONFIG.max,
+    idleTimeoutMillis: POOL_CONFIG.idleTimeoutMillis,
+    connectionTimeoutMillis: POOL_CONFIG.connectionTimeoutMillis
+  });
+
   return new Pool({
-    host: '/cloudsql/delta-entity-447812-p2:us-central1:nifya-db',
-    database: 'nifya',
+    host: `/cloudsql/${process.env.INSTANCE_CONNECTION_NAME}`,
+    database: process.env.DB_NAME,
     user: process.env.DB_USER,
     password: process.env.DB_PASSWORD,
     ...POOL_CONFIG
   });
 }
 
-async function testConnection(attempt = 1) {
+async function testConnection() {
   try {
+    console.log('🔄 Testing database connection...');
     const client = await pool.connect();
     try {
       await client.query('SELECT NOW()');
@@ -32,21 +40,21 @@ async function testConnection(attempt = 1) {
       client.release();
     }
   } catch (error) {
-    console.error(`❌ Connection test failed (attempt ${attempt}):`, error.message);
-    
-    if (attempt < RETRY_LIMIT) {
-      console.log(`🔄 Retrying in ${RETRY_DELAY}ms...`);
-      await new Promise(resolve => setTimeout(resolve, RETRY_DELAY));
-      return testConnection(attempt + 1);
-    }
-    
-    throw new Error(`Failed to connect after ${RETRY_LIMIT} attempts`);
+    console.error('❌ Database connection test failed:', error.message, '\nError details:', error);
+    throw error;
   }
 }
 
 export async function initializeDatabase() {
   console.log('🔄 Initializing database connection...');
   
+  // Log environment check
+  console.log('🔍 Checking database environment variables:', {
+    hasInstanceConnection: !!process.env.INSTANCE_CONNECTION_NAME,
+    hasDbName: !!process.env.DB_NAME,
+    hasDbUser: !!process.env.DB_USER
+  });
+
   try {
     pool = await createPool();
     
@@ -55,11 +63,11 @@ export async function initializeDatabase() {
       console.error('🚨 Unexpected error on idle client:', err);
     });
 
-    pool.on('connect', () => {
-      console.log('📡 New client connected to database');
+    pool.on('connect', (client) => {
+      console.log('📡 New client connected to database:', client.processID);
     });
 
-    pool.on('remove', () => {
+    pool.on('remove', (client) => {
       console.log('🔌 Client removed from pool');
     });
 
@@ -69,7 +77,7 @@ export async function initializeDatabase() {
     console.log('✅ Database pool initialized successfully');
     return pool;
   } catch (error) {
-    console.error('❌ Database initialization failed:', error);
+    console.error('❌ Database initialization failed:', error.message, '\nStack:', error.stack);
     throw error;
   }
 }
