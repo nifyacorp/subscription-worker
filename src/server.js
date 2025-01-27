@@ -1,23 +1,31 @@
 import express from 'express';
+import { PubSub } from '@google-cloud/pubsub';
 
 const app = express();
 app.use(express.json());
 
-// Basic endpoint for Pub/Sub messages
+// Initialize Pub/Sub client
+const pubsub = new PubSub();
+const subscriptionName = 'subscription-events-sub';
+const topicName = 'subscription-events';
+
+// Basic endpoint for Pub/Sub push messages
 app.post('/subscription-events', (req, res) => {
   try {
     const message = req.body.message;
-    console.log('📥 Received Pub/Sub message:', {
+    console.log('📥 Received message:', {
       messageId: message.messageId,
       publishTime: message.publishTime
     });
-    console.log('✅ Acknowledged message:', message.messageId);
+
+    const data = message.data ? 
+      JSON.parse(Buffer.from(message.data, 'base64').toString()) : 
+      null;
+
+    console.log('📦 Message data:', JSON.stringify(data, null, 2));
     res.status(204).send();
   } catch (error) {
-    console.error('❌ Error processing message:', {
-      error: error.message,
-      stack: error.stack
-    });
+    console.error('❌ Error:', error);
     res.status(500).send('Internal Server Error');
   }
 });
@@ -29,5 +37,5 @@ app.get('/', (req, res) => {
 
 const port = process.env.PORT || 8080;
 app.listen(port, () => {
-  console.log(`🚀 Server started on port ${port}`);
+  console.log(`🚀 Worker listening on port ${port}`);
 });
