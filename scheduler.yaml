@@ -1,0 +1,19 @@
+steps:
+  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+    entrypoint: gcloud
+    args:
+      - 'scheduler'
+      - 'jobs'
+      - 'create'
+      - 'http'
+      - 'process-subscriptions'
+      - '--schedule'
+      - '*/5 * * * *'
+      - '--uri'
+      - 'https://subscription-processor-xxxxx-uc.a.run.app/process-subscriptions'
+      - '--http-method'
+      - 'POST'
+      - '--region'
+      - 'us-central1'
+      - '--time-zone'
+      - 'UTC'
