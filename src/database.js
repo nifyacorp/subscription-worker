@@ -1,6 +1,9 @@
 import pg from 'pg';
 const { Pool } = pg;
 
+// Hardcoded instance connection name
+const INSTANCE_CONNECTION_NAME = 'delta-entity-447812-p2:us-central1:nifya-db';
+
 // Pool configuration
 const POOL_CONFIG = {
   max: 20,
@@ -14,7 +17,7 @@ let pool;
 async function createPool() {
   // Log database configuration (excluding sensitive data)
   console.log('Database configuration:', {
-    host: `/cloudsql/${process.env.INSTANCE_CONNECTION_NAME}`,
+    host: `/cloudsql/${INSTANCE_CONNECTION_NAME}`,
     database: process.env.DB_NAME,
     hasUser: !!process.env.DB_USER,
     hasPassword: !!process.env.DB_PASSWORD,
@@ -22,7 +25,7 @@ async function createPool() {
   });
 
   return new Pool({
-    host: `/cloudsql/${process.env.INSTANCE_CONNECTION_NAME}`,
+    host: `/cloudsql/${INSTANCE_CONNECTION_NAME}`,
     database: process.env.DB_NAME,
     user: process.env.DB_USER,
     password: process.env.DB_PASSWORD,
@@ -59,7 +62,7 @@ export async function initializeDatabase() {
   
   // Log environment check
   console.log('🔍 Checking database environment variables:', {
-    hasInstanceConnection: !!process.env.INSTANCE_CONNECTION_NAME,
+    hasInstanceConnection: true,
     hasDbName: !!process.env.DB_NAME,
     hasDbUser: !!process.env.DB_USER
   });
