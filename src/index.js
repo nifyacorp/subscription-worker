@@ -67,9 +67,15 @@ async function startServer() {
     const pool = await initializePool();
     logger.debug('Database pool initialized');
 
-    logger.debug('Retrieving parser API key');
-    const parserApiKey = await getSecret('PARSER_API_KEY');
-    logger.debug('Parser API key retrieved');
+    // Make parser API key optional
+    let parserApiKey;
+    try {
+      parserApiKey = await getSecret('PARSER_API_KEY');
+      logger.debug('Parser API key retrieved');
+    } catch (error) {
+      logger.warn('Parser API key not found, continuing without it');
+      parserApiKey = null;
+    }
 
     const subscriptionProcessor = new SubscriptionProcessor(pool, parserApiKey);
     logger.info('Subscription processor initialized');

@@ -13,12 +13,17 @@ const logger = pino({
 
 class BOEController {
   constructor(apiKey, baseURL = process.env.PARSER_BASE_URL) {
+    const headers = {
+      'Content-Type': 'application/json'
+    };
+    
+    if (apiKey) {
+      headers['Authorization'] = `Bearer ${apiKey}`;
+    }
+    
     this.client = axios.create({
       baseURL,
-      headers: {
-        'Authorization': `Bearer ${apiKey}`,
-        'Content-Type': 'application/json'
-      }
+      headers
     });
   }
 
