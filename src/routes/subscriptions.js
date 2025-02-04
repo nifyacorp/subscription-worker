@@ -8,6 +8,7 @@ function createSubscriptionRouter(subscriptionProcessor) {
   router.get('/pending-subscriptions', async (req, res) => {
     try {
       logger.debug('Fetching pending subscriptions');
+      const startTime = Date.now();
       const client = await subscriptionProcessor.pool.connect();
       
       try {
@@ -27,16 +28,17 @@ function createSubscriptionRouter(subscriptionProcessor) {
           LIMIT 5
         `);
 
+        // Log the raw database response
+        logger.info({
+          query_time_ms: Date.now() - startTime,
+          rows_returned: result.rows.length,
+          raw_response: result.rows
+        }, 'Database query results');
         const response = {
           count: result.rows.length,
           subscriptions: result.rows
         };
 
-        logger.info({
-          response,
-          query_execution_time: Date.now() - startTime,
-          subscription_ids: result.rows.map(row => row.subscription_id)
-        }, 'Retrieved pending subscriptions');
 
         res.status(200).json(response);
       } finally {

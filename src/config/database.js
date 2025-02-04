@@ -38,22 +38,6 @@ async function createPoolConfig() {
       user: dbUser,
       password: dbPassword,
       database: dbName,
-      // Log the exact configuration being used
-      ...(process.env.NODE_ENV === 'production' ? {
-        host: `/cloudsql/${INSTANCE_CONNECTION_NAME}`,
-        max: 20,
-        idleTimeoutMillis: 30000,
-        connectionTimeoutMillis: 5000,
-        application_name: 'subscription-processor',
-        statement_timeout: 10000,
-        query_timeout: 10000,
-        keepalive: true,
-        keepaliveInitialDelayMillis: 10000
-      } : {
-        host: 'localhost',
-        port: 5432
-      })
-    };
       ...(process.env.NODE_ENV === 'production' ? {
         host: `/cloudsql/${INSTANCE_CONNECTION_NAME}`,
         max: 20,
