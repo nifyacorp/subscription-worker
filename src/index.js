@@ -5,7 +5,7 @@ require('dotenv').config();
 
 const { getLogger } = require('./config/logger');
 const { initializePool } = require('./config/database');
-const { getSecret } = require('./config/secrets');
+const { getSecret, initialize: initializeSecrets } = require('./config/secrets');
 const SubscriptionProcessor = require('./services/subscriptionProcessor');
 const createHealthRouter = require('./routes/health');
 const createSubscriptionRouter = require('./routes/subscriptions');
@@ -50,11 +50,17 @@ async function startServer() {
     validateEnvironment();
     
     logger.debug({
+      phase: 'startup',
       node_env: process.env.NODE_ENV,
       project_id: process.env.PROJECT_ID,
       parser_base_url: process.env.PARSER_BASE_URL,
       log_level: process.env.LOG_LEVEL
     }, 'Starting server with environment configuration');
+
+    // Initialize Secret Manager
+    logger.debug('Initializing Secret Manager');
+    await initializeSecrets();
+    logger.debug('Secret Manager initialized');
 
     // Initialize services
     logger.debug('Initializing database pool');
@@ -66,7 +72,7 @@ async function startServer() {
     logger.debug('Parser API key retrieved');
 
     const subscriptionProcessor = new SubscriptionProcessor(pool, parserApiKey);
-    logger.debug('Subscription processor initialized');
+    logger.info('Subscription processor initialized');
 
     // Initialize Express app
     const app = express();
@@ -76,7 +82,7 @@ async function startServer() {
     // Register routes
     app.use(createHealthRouter(pool));
     app.use(createSubscriptionRouter(subscriptionProcessor));
-    logger.debug('Routes registered');
+    logger.info('Routes registered');
 
     // Add error handling middleware
     app.use((err, req, res, next) => {
@@ -96,6 +102,7 @@ async function startServer() {
     const port = process.env.PORT || 8080;
     const server = app.listen(port, () => {
       logger.info({ 
+        phase: 'server_started',
         port,
         node_env: process.env.NODE_ENV,
         project_id: process.env.PROJECT_ID
@@ -107,6 +114,7 @@ async function startServer() {
     return { server, pool };
   } catch (error) {
     logger.error({ 
+      phase: 'startup_failed',
       error,
       errorName: error.name,
       errorCode: error.code,
@@ -122,6 +130,7 @@ async function startServer() {
 // Global error handlers
 const handleFatalError = (error, type) => {
   logger.fatal({
+    phase: 'fatal_error',
     error,
     errorName: error.name,
     errorCode: error.code,
