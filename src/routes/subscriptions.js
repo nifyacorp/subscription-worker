@@ -5,6 +5,59 @@ const logger = getLogger('subscription-route');
 const router = express.Router();
 
 function createSubscriptionRouter(subscriptionProcessor) {
+  router.get('/pending-subscriptions', async (req, res) => {
+    try {
+      logger.debug('Fetching pending subscriptions');
+      const client = await subscriptionProcessor.pool.connect();
+      
+      try {
+        const result = await client.query(`
+          SELECT 
+            subscription_id,
+            status,
+            last_run_at,
+            next_run_at,
+            metadata,
+            error
+          FROM subscription_processing
+          WHERE status = 'pending'
+          AND metadata->>'type' = 'boe'
+          AND metadata->>'id' = 'boe-general'
+          AND next_run_at <= NOW()
+          LIMIT 5
+        `);
+
+        const response = {
+          count: result.rows.length,
+          subscriptions: result.rows
+        };
+
+        logger.info({
+          response,
+          query_execution_time: Date.now() - startTime,
+          subscription_ids: result.rows.map(row => row.subscription_id)
+        }, 'Retrieved pending subscriptions');
+
+        res.status(200).json(response);
+      } finally {
+        client.release();
+      }
+    } catch (error) {
+      logger.error({ 
+        error,
+        errorName: error.name,
+        errorCode: error.code,
+        errorStack: error.stack,
+        errorMessage: error.message
+      }, 'Failed to fetch pending subscriptions');
+      
+      res.status(500).json({ 
+        error: 'Failed to fetch pending subscriptions',
+        details: error.message
+      });
+    }
+  });
+
   router.post('/process-subscriptions', async (req, res) => {
     try {
       await subscriptionProcessor.processSubscriptions();
