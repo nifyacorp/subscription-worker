@@ -2,6 +2,54 @@
 
 A Node.js microservice that processes BOE (Boletín Oficial del Estado) subscriptions using Cloud Run and Cloud SQL.
 
+## Repository Structure
+
+```
+.
+├── src/
+│   ├── config/           # Configuration modules
+│   │   ├── database.js   # Database connection and pool management
+│   │   ├── logger.js     # Pino logger configuration
+│   │   └── secrets.js    # Google Cloud Secret Manager integration
+│   ├── controllers/      # Business logic controllers
+│   │   └── boe-parser/   # BOE document parsing controller
+│   ├── routes/          # Express route handlers
+│   │   ├── health.js    # Health check endpoint
+│   │   └── subscriptions.js # Subscription-related endpoints
+│   ├── services/        # Core business services
+│   │   └── subscriptionProcessor.js # Main subscription processing logic
+│   └── index.js         # Application entry point
+├── Dockerfile           # Container configuration
+├── cloudbuild.yaml      # Cloud Build deployment configuration
+├── scheduler.yaml       # Cloud Scheduler job configuration
+└── package.json         # Project dependencies and scripts
+```
+
+## Component Overview
+
+### Configuration (`src/config/`)
+- `database.js`: Manages PostgreSQL connection pool with Cloud SQL
+- `logger.js`: Configures structured logging with Pino
+- `secrets.js`: Handles secure access to configuration via Secret Manager
+
+### Controllers (`src/controllers/`)
+- `boe-parser/`: Handles BOE document analysis and processing
+  - Communicates with external parser service
+  - Manages subscription state transitions
+  - Processes analysis results
+
+### Routes (`src/routes/`)
+- `health.js`: System health monitoring endpoint
+- `subscriptions.js`: API endpoints for subscription management
+  - GET `/pending-subscriptions`: Lists pending subscriptions
+  - POST `/process-subscriptions`: Triggers subscription processing
+
+### Services (`src/services/`)
+- `subscriptionProcessor.js`: Core business logic
+  - Coordinates subscription processing
+  - Manages database transactions
+  - Handles error recovery and retries
+
 ## Service URL
 
 The service is deployed and accessible at:
@@ -10,6 +58,12 @@ https://subscription-worker-415554190254.us-central1.run.app
 ```
 
 ## API Endpoints
+
+### Health Check
+```http
+GET /_health
+```
+Returns the service and database health status.
 
 ### Get Pending Subscriptions
 ```http
@@ -50,7 +104,6 @@ Response format:
 }
 ```
 
-
 ## Overview
 
 This service processes subscriptions by:
@@ -61,22 +114,19 @@ This service processes subscriptions by:
 
 ## Architecture
 
-- **Runtime**: Node.js 18 on Cloud Run
-- **Database**: PostgreSQL on Cloud SQL
-- **Dependencies**:
-  - Express.js for HTTP server
-  - node-postgres for database connectivity
-  - Cloud SQL Auth Proxy for secure database connections
-  - Pino for structured logging
-  - Cloud Secret Manager for secure configuration
+### Runtime Environment
+- **Platform**: Google Cloud Run (serverless)
+- **Base Image**: Node.js 18 (slim)
+- **Database**: Cloud SQL (PostgreSQL)
 
-## Key Components
-
-- `src/index.js`: Application entry point and server setup
-- `src/config/`: Configuration modules for database, logging, and secrets
-- `src/controllers/`: Business logic controllers (BOE parser)
-- `src/routes/`: Express route handlers
-- `src/services/`: Core business services
+### Key Dependencies
+- **Web Framework**: Express.js
+- **Database**: node-postgres (pg)
+- **Security**: 
+  - Cloud SQL Auth Proxy
+  - Cloud Secret Manager
+- **Logging**: Pino with structured JSON output
+- **HTTP Client**: Axios for external API calls
 
 ## Database Schema
 
@@ -132,6 +182,12 @@ gcloud builds submit --config=scheduler.yaml  # Optional: For scheduler setup
 
 ## Development
 
+### Project Setup
+```bash
+git clone <repository-url>
+cd subscription-processor
+```
+
 ### Prerequisites
 
 - Node.js 18+
@@ -165,16 +221,37 @@ curl http://localhost:8080/_health
 
 ## Monitoring
 
-- **Logging**: Structured JSON logs using Pino
-- **Health Checks**: HTTP endpoint at `/_health`
-- **Error Handling**: Comprehensive error capture and reporting
+### Logging
+- Structured JSON logs via Pino
+- Log levels configurable via LOG_LEVEL env var
+- Detailed error tracking with stack traces
+
+### Health Monitoring
+- HTTP health check endpoint at `/_health`
+- Database connectivity validation
+- Cloud Run health checks integration
+
+### Error Tracking
+- Comprehensive error capture
+- Detailed error context in logs
+- Automatic error recovery where possible
 
 ## Security
 
-- Cloud SQL Auth Proxy for secure database connections
-- Secret Manager for sensitive configuration
-- Row-level security in PostgreSQL
+### Database Security
+- Cloud SQL Auth Proxy for encrypted connections
+- Connection pooling with configurable limits
+- Row-level security in PostgreSQL tables
+
+### Configuration Security
+- Sensitive data stored in Secret Manager
+- Environment-specific configurations
+- Secure secret rotation support
+
+### API Security
 - HTTPS-only endpoints
+- Cloud Run authentication (optional)
+- Rate limiting on API endpoints
 
 ## Contributing
 
