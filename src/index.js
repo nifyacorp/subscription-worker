@@ -1,5 +1,6 @@
 const express = require('express');
 const expressPino = require('express-pino-logger');
+const { promisify } = require('util');
 require('dotenv').config();
 
 const { getLogger } = require('./config/logger');
@@ -9,11 +10,45 @@ const SubscriptionProcessor = require('./services/subscriptionProcessor');
 const createHealthRouter = require('./routes/health');
 const createSubscriptionRouter = require('./routes/subscriptions');
 
+const REQUIRED_ENV_VARS = ['PROJECT_ID', 'PARSER_BASE_URL'];
 const logger = getLogger('server');
 const expressLogger = expressPino({ logger });
 
+function validateEnvironment() {
+  const missingVars = REQUIRED_ENV_VARS.filter(varName => !process.env[varName]);
+  if (missingVars.length > 0) {
+    throw new Error(`Missing required environment variables: ${missingVars.join(', ')}`);
+  }
+}
+
+function setupGracefulShutdown(server, pool) {
+  const shutdown = async (signal) => {
+    logger.info({ signal }, 'Shutdown signal received, closing server...');
+    
+    try {
+      await promisify(server.close.bind(server))();
+      logger.info('Server closed');
+      
+      if (pool) {
+        await pool.end();
+        logger.info('Database pool closed');
+      }
+      
+      process.exit(0);
+    } catch (error) {
+      logger.error({ error }, 'Error during shutdown');
+      process.exit(1);
+    }
+  };
+
+  process.on('SIGTERM', () => shutdown('SIGTERM'));
+  process.on('SIGINT', () => shutdown('SIGINT'));
+}
+
 async function startServer() {
   try {
+    validateEnvironment();
+    
     logger.debug({
       node_env: process.env.NODE_ENV,
       project_id: process.env.PROJECT_ID,
@@ -43,15 +78,33 @@ async function startServer() {
     app.use(createSubscriptionRouter(subscriptionProcessor));
     logger.debug('Routes registered');
 
+    // Add error handling middleware
+    app.use((err, req, res, next) => {
+      logger.error({ 
+        error: err,
+        url: req.url,
+        method: req.method
+      }, 'Unhandled error in request');
+      
+      res.status(500).json({
+        error: 'Internal server error',
+        message: process.env.NODE_ENV === 'development' ? err.message : undefined
+      });
+    });
+
     // Start server
     const port = process.env.PORT || 8080;
-    app.listen(port, () => {
+    const server = app.listen(port, () => {
       logger.info({ 
         port,
         node_env: process.env.NODE_ENV,
         project_id: process.env.PROJECT_ID
       }, 'Server started successfully');
     });
+    
+    setupGracefulShutdown(server, pool);
+    
+    return { server, pool };
   } catch (error) {
     logger.error({ 
       error,
@@ -66,28 +119,20 @@ async function startServer() {
   }
 }
 
-// Add uncaught exception handler
-process.on('uncaughtException', (error) => {
+// Global error handlers
+const handleFatalError = (error, type) => {
   logger.fatal({
     error,
     errorName: error.name,
     errorCode: error.code,
     errorStack: error.stack,
-    errorMessage: error.message
-  }, 'Uncaught exception detected');
+    errorMessage: error.message,
+    type
+  }, `Fatal error detected: ${type}`);
   process.exit(1);
-});
+};
 
-// Add unhandled rejection handler
-process.on('unhandledRejection', (reason, promise) => {
-  logger.fatal({
-    reason,
-    reasonName: reason?.name,
-    reasonCode: reason?.code,
-    reasonStack: reason?.stack,
-    reasonMessage: reason?.message
-  }, 'Unhandled rejection detected');
-  process.exit(1);
-});
+process.on('uncaughtException', (error) => handleFatalError(error, 'uncaughtException'));
+process.on('unhandledRejection', (error) => handleFatalError(error, 'unhandledRejection'));
 
 startServer();

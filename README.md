@@ -2,6 +2,55 @@
 
 A Node.js microservice that processes BOE (Boletín Oficial del Estado) subscriptions using Cloud Run and Cloud SQL.
 
+## Service URL
+
+The service is deployed and accessible at:
+```
+https://subscription-worker-415554190254.us-central1.run.app
+```
+
+## API Endpoints
+
+### Get Pending Subscriptions
+```http
+GET /pending-subscriptions
+```
+Returns a list of pending BOE subscriptions that are ready for processing.
+
+Response format:
+```json
+{
+  "count": 2,
+  "subscriptions": [
+    {
+      "subscription_id": "uuid",
+      "status": "pending",
+      "last_run_at": "2024-02-04T11:00:00Z",
+      "next_run_at": "2024-02-04T11:05:00Z",
+      "metadata": {
+        "type": "boe",
+        "id": "boe-general"
+      },
+      "error": null
+    }
+  ]
+}
+```
+
+### Process Subscriptions
+```http
+POST /process-subscriptions
+```
+Triggers the processing of pending BOE subscriptions.
+
+Response format:
+```json
+{
+  "status": "success"
+}
+```
+
+
 ## Overview
 
 This service processes subscriptions by:

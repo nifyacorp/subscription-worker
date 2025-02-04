@@ -218,3 +218,9 @@ async function initializePool() {
     throw error;
   }
 }
+
+module.exports = {
+  initializePool,
+  createPoolConfig,
+  testDatabaseConnection
+};
