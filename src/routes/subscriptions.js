@@ -206,8 +206,21 @@ function createSubscriptionRouter(subscriptionProcessor) {
 
   router.post('/process-subscriptions', async (req, res) => {
     try {
-      await subscriptionProcessor.processSubscriptions();
-      res.status(200).json({ status: 'success' });
+      const results = await subscriptionProcessor.processSubscriptions();
+      
+      if (!results || results.length === 0) {
+        return res.status(200).json({
+          status: 'success',
+          message: 'No pending subscriptions to process'
+        });
+      }
+
+      res.status(200).json({
+        status: 'success',
+        processed: results.length,
+        results: results
+      });
+
     } catch (error) {
       logger.error({ error }, 'Failed to process subscriptions');
       res.status(500).json({ error: 'Internal server error' });
