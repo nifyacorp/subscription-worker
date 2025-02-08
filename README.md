@@ -69,33 +69,56 @@ Returns the service and database health status.
 ```http
 GET /pending-subscriptions
 ```
-Returns a list of pending BOE subscriptions that are ready for processing.
+Returns a list of all active subscriptions that are ready for processing.
 
 Response format:
 ```json
 {
-  "count": 2,
-  "subscriptions": [
-    {
-      "subscription_id": "uuid",
-      "status": "pending",
-      "last_run_at": "2024-02-04T11:00:00Z",
-      "next_run_at": "2024-02-04T11:05:00Z",
-      "metadata": {
-        "type": "boe",
-        "id": "boe-general"
-      },
-      "error": null
-    }
-  ]
+   "count": 2,
+   "subscriptions": [
+     {
+       "processing_id": "uuid",
+       "subscription_id": "uuid",
+       "metadata": {},
+       "user_id": "uuid",
+       "type_id": "boe",
+       "prompts": ["query1", "query2"],
+       "frequency": "daily",
+       "last_check_at": "2024-02-04T11:00:00Z"
+     }
+   ]
 }
 ```
+
+### Process Single Subscription
+```http
+POST /process-subscription/:id
+```
+Processes a specific subscription by ID. The endpoint will:
+1. Lock the subscription for processing
+2. Update its status to 'processing'
+3. Process content based on subscription type
+4. Create notifications for matches
+5. Update processing status and schedule next run
+
+Response format:
+```json
+{
+  "status": "success",
+  "subscription_id": "uuid",
+  "matches_found": 2
+}
+```
+
+Error responses:
+- `404`: Subscription not found or not pending
+- `500`: Processing error with details
 
 ### Process Subscriptions
 ```http
 POST /process-subscriptions
 ```
-Triggers the processing of pending BOE subscriptions.
+Triggers the processing of all pending subscriptions.
 
 Response format:
 ```json
@@ -107,10 +130,11 @@ Response format:
 ## Overview
 
 This service processes subscriptions by:
-1. Fetching pending subscriptions from a PostgreSQL database
-2. Analyzing BOE content using an external parser service
-3. Creating notifications based on the analysis results
-4. Managing subscription states and scheduling
+1. Fetching active pending subscriptions from PostgreSQL
+2. Processing content based on subscription type (e.g., BOE analysis)
+3. Creating notifications for matches
+4. Managing subscription states and scheduling next runs
+5. Handling errors with automatic retries
 
 ## Architecture
 
@@ -167,8 +191,20 @@ The service connects to Cloud SQL using the following configuration:
 
 ### Tables
 
+- `subscriptions`: Stores subscription configurations
+  - `id`: Primary key
+  - `user_id`: Reference to user
+  - `type_id`: Subscription type (e.g., 'boe')
+  - `prompts`: Array of search queries/prompts
+  - `frequency`: Check frequency ('daily'/'hourly')
+  - `active`: Boolean flag
+  - `last_check_at`: Last processing timestamp
+  - `created_at`: Creation timestamp
+  - `updated_at`: Last update timestamp
+
 - `subscription_processing`: Manages subscription states and scheduling
-  - `subscription_id`: Unique identifier
+  - `id`: Primary key
+  - `subscription_id`: Reference to subscription
   - `status`: Current status (pending/processing/completed/failed)
   - `last_run_at`: Last execution timestamp
   - `next_run_at`: Next scheduled execution
@@ -176,8 +212,13 @@ The service connects to Cloud SQL using the following configuration:
   - `error`: Error message if failed
 
 - `notifications`: Stores processing results
+  - `id`: Primary key
+  - `user_id`: Reference to user
   - `subscription_id`: Reference to subscription
+  - `title`: Notification title
   - `content`: JSON content of processing results
+  - `source_url`: URL to original content
+  - `metadata`: Additional match details
   - `created_at`: Creation timestamp
 
 ## Environment Variables

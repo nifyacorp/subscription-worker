@@ -13,19 +13,9 @@ function createSubscriptionRouter(subscriptionProcessor) {
       try {
         const result = await client.query(`
           SELECT 
-            sp.id as processing_id,
-            sp.subscription_id,
-            sp.metadata,
-            s.user_id,
-            s.type_id,
-            s.prompts,
-            s.frequency,
-            s.last_check_at
-          FROM subscription_processing sp
-          JOIN subscriptions s ON s.id = sp.subscription_id
-          WHERE sp.status = 'pending'
-            AND sp.next_run_at <= NOW()
-            AND s.active = true
+            *
+          FROM subscription_processing
+          WHERE status = 'pending'
         `);
 
         const response = {
