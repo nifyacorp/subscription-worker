@@ -119,11 +119,46 @@ This service processes subscriptions by:
 - **Base Image**: Node.js 18 (slim)
 - **Database**: Cloud SQL (PostgreSQL)
 
+### Database Connection
+
+The service connects to Cloud SQL using the following configuration:
+
+1. **Cloud Run Configuration**:
+   - Set the `INSTANCE_CONNECTION_NAME` environment variable:
+     ```
+     INSTANCE_CONNECTION_NAME=project-id:region:instance-name
+     ```
+   - Attach the Cloud SQL instance to the Cloud Run service
+   - Grant the service account the Cloud SQL Client role
+
+2. **Database Credentials**:
+   Store these in Secret Manager:
+   - `DB_NAME`: Database name
+   - `DB_USER`: Database user
+   - `DB_PASSWORD`: Database password
+
+3. **Connection Method**:
+   - Uses Unix Domain Socket in `/cloudsql/INSTANCE_CONNECTION_NAME`
+   - No Cloud SQL Auth Proxy needed - Cloud Run handles this automatically
+   - Connection pooling with configurable limits
+
+4. **Connection Pool Configuration**:
+   ```javascript
+   const config = {
+     user: process.env.DB_USER,
+     password: process.env.DB_PASSWORD,
+     database: process.env.DB_NAME,
+     host: `/cloudsql/${INSTANCE_CONNECTION_NAME}`,
+     max: 20,                           // Maximum pool size
+     idleTimeoutMillis: 30000,         // Close idle connections after 30s
+     connectionTimeoutMillis: 5000     // Connection timeout after 5s
+   };
+   ```
+
 ### Key Dependencies
 - **Web Framework**: Express.js
 - **Database**: node-postgres (pg)
 - **Security**: 
-  - Cloud SQL Auth Proxy
   - Cloud Secret Manager
 - **Logging**: Pino with structured JSON output
 - **HTTP Client**: Axios for external API calls
@@ -183,6 +218,24 @@ gcloud builds submit --config=scheduler.yaml  # Optional: For scheduler setup
 ## Development
 
 ### Project Setup
+
+#### Cloud SQL Setup
+1. Create a Cloud SQL instance in your project
+2. Create a database and user
+3. Store credentials in Secret Manager:
+   ```bash
+   gcloud secrets create DB_NAME --data-file=- <<< "your-db-name"
+   gcloud secrets create DB_USER --data-file=- <<< "your-db-user"
+   gcloud secrets create DB_PASSWORD --data-file=- <<< "your-db-password"
+   ```
+4. Grant Secret Manager access to your service account:
+   ```bash
+   gcloud projects add-iam-policy-binding PROJECT_ID \
+     --member="serviceAccount:SERVICE_ACCOUNT_EMAIL" \
+     --role="roles/secretmanager.secretAccessor"
+   ```
+
+#### Local Development
 ```bash
 git clone <repository-url>
 cd subscription-processor

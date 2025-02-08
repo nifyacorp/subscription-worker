@@ -8,35 +8,34 @@ function createSubscriptionRouter(subscriptionProcessor) {
   router.get('/pending-subscriptions', async (req, res) => {
     try {
       logger.debug('Fetching pending subscriptions');
-      const startTime = Date.now();
       const client = await subscriptionProcessor.pool.connect();
       
       try {
         const result = await client.query(`
           SELECT 
-            subscription_id,
-            status,
-            last_run_at,
-            next_run_at,
-            metadata,
-            error
+            sp.subscription_id,
+            sp.metadata->>'action' as action,
+            sp.metadata->>'parameters' as parameters,
+            sp.last_run_at
           FROM subscription_processing
           WHERE status = 'pending'
           AND metadata->>'type' = 'boe'
           AND metadata->>'id' = 'boe-general'
+          AND metadata->>'action' IS NOT NULL
           AND next_run_at <= NOW()
           LIMIT 5
         `);
 
-        // Log the raw database response
-        logger.info({
-          query_time_ms: Date.now() - startTime,
-          rows_returned: result.rows.length,
-          raw_response: result.rows
-        }, 'Database query results');
+        // Transform the results to focus on actions
+        const actions = result.rows.map(row => ({
+          subscription_id: row.subscription_id,
+          action: row.action,
+          parameters: JSON.parse(row.parameters || '{}'),
+          last_executed: row.last_run_at
+        }));
+
         const response = {
-          count: result.rows.length,
-          subscriptions: result.rows
+          pending_actions: actions
         };
 
 
@@ -49,13 +48,11 @@ function createSubscriptionRouter(subscriptionProcessor) {
         error,
         errorName: error.name,
         errorCode: error.code,
-        errorStack: error.stack,
         errorMessage: error.message
       }, 'Failed to fetch pending subscriptions');
       
       res.status(500).json({ 
-        error: 'Failed to fetch pending subscriptions',
-        details: error.message
+        error: 'Failed to fetch pending subscription actions'
       });
     }
   });
