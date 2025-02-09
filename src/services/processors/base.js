@@ -25,3 +25,5 @@ class BaseProcessor {
     return true;
   }
 }
+
+module.exports = BaseProcessor;

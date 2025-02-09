@@ -17,12 +17,15 @@ A Node.js microservice that processes BOE (Boletín Oficial del Estado) subscrip
 │   │   ├── health.js    # Health check endpoint
 │   │   └── subscriptions.js # Subscription-related endpoints
 │   ├── services/        # Core business services
+│   │   ├── processors/  # Content processors
+│   │   │   ├── base.js  # Base processor class
+│   │   │   ├── boe.js   # BOE-specific processor
+│   │   │   └── registry.js # Processor type registry
 │   │   └── subscriptionProcessor.js # Main subscription processing logic
 │   └── index.js         # Application entry point
 ├── Dockerfile           # Container configuration
 ├── cloudbuild.yaml      # Cloud Build deployment configuration
-├── scheduler.yaml       # Cloud Scheduler job configuration
-└── package.json         # Project dependencies and scripts
+└── scheduler.yaml       # Cloud Scheduler job configuration
 ```
 
 ## Component Overview
@@ -32,30 +35,21 @@ A Node.js microservice that processes BOE (Boletín Oficial del Estado) subscrip
 - `logger.js`: Configures structured logging with Pino
 - `secrets.js`: Handles secure access to configuration via Secret Manager
 
-### Controllers (`src/controllers/`)
-- `boe-parser/`: Handles BOE document analysis and processing
-  - Communicates with external parser service
-  - Manages subscription state transitions
-  - Processes analysis results
-
-### Routes (`src/routes/`)
-- `health.js`: System health monitoring endpoint
-- `subscriptions.js`: API endpoints for subscription management
-  - GET `/pending-subscriptions`: Lists pending subscriptions
-  - POST `/process-subscriptions`: Triggers subscription processing
-
 ### Services (`src/services/`)
+- `processors/`: Content processing implementations
+  - `base.js`: Abstract base processor with common functionality
+  - `boe.js`: BOE-specific content processor
+  - `registry.js`: Registry for managing processor types
 - `subscriptionProcessor.js`: Core business logic
   - Coordinates subscription processing
   - Manages database transactions
   - Handles error recovery and retries
+  - Detailed debug logging for each processing step
 
-## Service URL
+## Service URLs
 
-The service is deployed and accessible at:
-```
-https://subscription-worker-415554190254.us-central1.run.app
-```
+- Main Service: `https://subscription-worker-415554190254.us-central1.run.app`
+- BOE Parser: `https://boe-parser-415554190254.us-central1.run.app`
 
 ## API Endpoints
 
@@ -110,10 +104,6 @@ Response format:
 }
 ```
 
-Error responses:
-- `404`: Subscription not found or not pending
-- `500`: Processing error with details
-
 ### Process Subscriptions
 ```http
 POST /process-subscriptions
@@ -123,237 +113,96 @@ Triggers the processing of all pending subscriptions.
 Response format:
 ```json
 {
-  "status": "success"
+  "status": "success",
+  "processed": 2,
+  "results": [
+    {
+      "subscription_id": "uuid",
+      "status": "success",
+      "matches_found": 1
+    }
+  ]
 }
 ```
 
-## Overview
+### Debug BOE Analysis
+```http
+POST /boe/debug/analyze-boe
+Content-Type: application/json
 
-This service processes subscriptions by:
-1. Fetching active pending subscriptions from PostgreSQL
-2. Processing content based on subscription type (e.g., BOE analysis)
-3. Creating notifications for matches
-4. Managing subscription states and scheduling next runs
-5. Handling errors with automatic retries
+{
+  "prompts": [
+    "Find all resolutions about public employment",
+    "List announcements about environmental grants"
+  ]
+}
+```
+Test endpoint for direct BOE content analysis.
 
-## Architecture
+## Debugging and Monitoring
 
-### Runtime Environment
-- **Platform**: Google Cloud Run (serverless)
-- **Base Image**: Node.js 18 (slim)
-- **Database**: Cloud SQL (PostgreSQL)
+The service includes comprehensive debug logging for each processing step:
 
-### Database Connection
+1. Subscription Processing:
+   - Pool status and connection metrics
+   - Query execution times
+   - Processing status updates
+   - Content analysis timing
+   - Notification creation metrics
 
-The service connects to Cloud SQL using the following configuration:
+2. BOE Processing:
+   - Service URL configuration
+   - Request/response timing
+   - Match statistics
+   - Error details
 
-1. **Cloud Run Configuration**:
-   - Set the `INSTANCE_CONNECTION_NAME` environment variable:
-     ```
-     INSTANCE_CONNECTION_NAME=project-id:region:instance-name
-     ```
-   - Attach the Cloud SQL instance to the Cloud Run service
-   - Grant the service account the Cloud SQL Client role
+3. Database Operations:
+   - Connection pool metrics
+   - Query execution times
+   - Transaction status
+   - Error handling
 
-2. **Database Credentials**:
-   Store these in Secret Manager:
-   - `DB_NAME`: Database name
-   - `DB_USER`: Database user
-   - `DB_PASSWORD`: Database password
+All logs are structured JSON format with:
+- Timestamps
+- Operation context
+- Performance metrics
+- Error details when applicable
 
-3. **Connection Method**:
-   - Uses Unix Domain Socket in `/cloudsql/INSTANCE_CONNECTION_NAME`
-   - No Cloud SQL Auth Proxy needed - Cloud Run handles this automatically
-   - Connection pooling with configurable limits
+## Testing
 
-4. **Connection Pool Configuration**:
-   ```javascript
-   const config = {
-     user: process.env.DB_USER,
-     password: process.env.DB_PASSWORD,
-     database: process.env.DB_NAME,
-     host: `/cloudsql/${INSTANCE_CONNECTION_NAME}`,
-     max: 20,                           // Maximum pool size
-     idleTimeoutMillis: 30000,         // Close idle connections after 30s
-     connectionTimeoutMillis: 5000     // Connection timeout after 5s
-   };
-   ```
+Use curl to test the endpoints:
 
-### Key Dependencies
-- **Web Framework**: Express.js
-- **Database**: node-postgres (pg)
-- **Security**: 
-  - Cloud Secret Manager
-- **Logging**: Pino with structured JSON output
-- **HTTP Client**: Axios for external API calls
+```bash
+# Health check
+curl http://localhost:8080/_health
 
-## Database Schema
+# Get pending subscriptions
+curl http://localhost:8080/pending-subscriptions
 
-### Tables
+# Process all subscriptions
+curl -X POST http://localhost:8080/process-subscriptions
 
-- `subscriptions`: Stores subscription configurations
-  - `id`: Primary key
-  - `user_id`: Reference to user
-  - `type_id`: Subscription type (e.g., 'boe')
-  - `prompts`: Array of search queries/prompts
-  - `frequency`: Check frequency ('daily'/'hourly')
-  - `active`: Boolean flag
-  - `last_check_at`: Last processing timestamp
-  - `created_at`: Creation timestamp
-  - `updated_at`: Last update timestamp
+# Process specific subscription
+curl -X POST http://localhost:8080/process-subscription/YOUR_SUBSCRIPTION_ID
 
-- `subscription_processing`: Manages subscription states and scheduling
-  - `id`: Primary key
-  - `subscription_id`: Reference to subscription
-  - `status`: Current status (pending/processing/completed/failed)
-  - `last_run_at`: Last execution timestamp
-  - `next_run_at`: Next scheduled execution
-  - `metadata`: JSON field with subscription details
-  - `error`: Error message if failed
-
-- `notifications`: Stores processing results
-  - `id`: Primary key
-  - `user_id`: Reference to user
-  - `subscription_id`: Reference to subscription
-  - `title`: Notification title
-  - `content`: JSON content of processing results
-  - `source_url`: URL to original content
-  - `metadata`: Additional match details
-  - `created_at`: Creation timestamp
+# Test BOE analysis
+curl -X POST http://localhost:8080/boe/debug/analyze-boe \
+  -H "Content-Type: application/json" \
+  -d '{
+    "prompts": [
+      "Find all resolutions about public employment",
+      "List announcements about environmental grants"
+    ]
+  }'
+```
 
 ## Environment Variables
 
 ```env
-PARSER_BASE_URL=https://your-parser-service-url
+PARSER_BASE_URL=https://boe-parser-415554190254.us-central1.run.app
 LOG_LEVEL=info
 PROJECT_ID=your-project-id
 ```
-
-## Cloud Run Configuration
-
-The service is deployed to Cloud Run with:
-- Memory: Default
-- CPU: Default
-- Concurrency: Default
-- HTTP/2: Enabled
-- Startup probe: TCP on port 8080
-
-## Deployment
-
-Deployment is handled through Cloud Build using:
-- `cloudbuild.yaml`: Main service deployment
-- `scheduler.yaml`: Cloud Scheduler job setup
-
-### Deploy Steps
-
-1. Build Docker image
-2. Push to Container Registry
-3. Deploy to Cloud Run
-4. Set up Cloud Scheduler (optional)
-
-```bash
-gcloud builds submit --config=cloudbuild.yaml
-gcloud builds submit --config=scheduler.yaml  # Optional: For scheduler setup
-```
-
-## Development
-
-### Project Setup
-
-#### Cloud SQL Setup
-1. Create a Cloud SQL instance in your project
-2. Create a database and user
-3. Store credentials in Secret Manager:
-   ```bash
-   gcloud secrets create DB_NAME --data-file=- <<< "your-db-name"
-   gcloud secrets create DB_USER --data-file=- <<< "your-db-user"
-   gcloud secrets create DB_PASSWORD --data-file=- <<< "your-db-password"
-   ```
-4. Grant Secret Manager access to your service account:
-   ```bash
-   gcloud projects add-iam-policy-binding PROJECT_ID \
-     --member="serviceAccount:SERVICE_ACCOUNT_EMAIL" \
-     --role="roles/secretmanager.secretAccessor"
-   ```
-
-#### Local Development
-```bash
-git clone <repository-url>
-cd subscription-processor
-```
-
-### Prerequisites
-
-- Node.js 18+
-- PostgreSQL
-- Google Cloud SDK
-
-### Local Setup
-
-1. Install dependencies:
-```bash
-npm install
-```
-
-2. Set up environment variables:
-```bash
-cp .env.example .env
-# Edit .env with your values
-```
-
-3. Start development server:
-```bash
-npm run dev
-```
-
-### Testing
-
-The service includes a health check endpoint:
-```bash
-curl http://localhost:8080/_health
-```
-
-## Monitoring
-
-### Logging
-- Structured JSON logs via Pino
-- Log levels configurable via LOG_LEVEL env var
-- Detailed error tracking with stack traces
-
-### Health Monitoring
-- HTTP health check endpoint at `/_health`
-- Database connectivity validation
-- Cloud Run health checks integration
-
-### Error Tracking
-- Comprehensive error capture
-- Detailed error context in logs
-- Automatic error recovery where possible
-
-## Security
-
-### Database Security
-- Cloud SQL Auth Proxy for encrypted connections
-- Connection pooling with configurable limits
-- Row-level security in PostgreSQL tables
-
-### Configuration Security
-- Sensitive data stored in Secret Manager
-- Environment-specific configurations
-- Secure secret rotation support
-
-### API Security
-- HTTPS-only endpoints
-- Cloud Run authentication (optional)
-- Rate limiting on API endpoints
-
-## Contributing
-
-1. Follow the existing code structure
-2. Add comprehensive logging
-3. Include error handling
-4. Update documentation as needed
-5. Test thoroughly before submitting changes
 
 ## License
 
