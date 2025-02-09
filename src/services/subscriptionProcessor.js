@@ -39,7 +39,7 @@ class SubscriptionProcessor {
           sp.subscription_id,
           sp.metadata,
           s.user_id,
-          s.type_id,
+          COALESCE(s.type_id, sp.metadata->>'type') as type_id,
           s.prompts,
           s.frequency,
           s.last_check_at
@@ -69,7 +69,7 @@ class SubscriptionProcessor {
           const subStartTime = Date.now();
           this.logger.debug({ 
             subscription_id: subscription.subscription_id,
-            type: subscription.type_id,
+            type: subscription.type_id || 'boe',
             prompts_count: subscription.prompts?.length,
             frequency: subscription.frequency,
             last_check_at: subscription.last_check_at
