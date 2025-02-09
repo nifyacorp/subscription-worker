@@ -39,7 +39,7 @@ class SubscriptionProcessor {
           sp.subscription_id,
           sp.metadata,
           s.user_id,
-          COALESCE(s.type_id, sp.metadata->>'type') as type_id,
+          COALESCE(s.type_id::text, sp.metadata->>'type') as type_id,
           s.prompts,
           s.frequency,
           s.last_check_at
@@ -50,6 +50,19 @@ class SubscriptionProcessor {
           AND s.active = true
         FOR UPDATE SKIP LOCKED
       `);
+
+      // Log detailed subscription data
+      if (result.rows.length > 0) {
+        this.logger.debug({ 
+          first_subscription: {
+            ...result.rows[0],
+            metadata_type: result.rows[0].metadata?.type,
+            type_id: result.rows[0].type_id,
+            subscription_id: result.rows[0].subscription_id,
+            processing_id: result.rows[0].processing_id
+          }
+        }, 'First pending subscription details');
+      }
 
       this.logger.info({ 
         subscriptions_found: result.rows.length,
@@ -69,7 +82,9 @@ class SubscriptionProcessor {
           const subStartTime = Date.now();
           this.logger.debug({ 
             subscription_id: subscription.subscription_id,
+            processing_id: subscription.processing_id,
             type: subscription.type_id || 'boe',
+            metadata: subscription.metadata,
             prompts_count: subscription.prompts?.length,
             frequency: subscription.frequency,
             last_check_at: subscription.last_check_at
@@ -93,6 +108,12 @@ class SubscriptionProcessor {
           if (!processor) {
             this.logger.warn({
               type: subscription.type_id,
+              subscription_details: {
+                id: subscription.subscription_id,
+                processing_id: subscription.processing_id,
+                metadata: subscription.metadata,
+                type_id: subscription.type_id
+              },
               available_processors: Array.from(this.processors.keys())
             }, 'No processor found for subscription type');
             throw new Error(`No processor available for type: ${subscription.type_id}`);
