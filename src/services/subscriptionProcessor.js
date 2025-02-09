@@ -106,18 +106,23 @@ class SubscriptionProcessor {
 
           // Process based on subscription type
           let processingResult;
-          const processor = this.processors.get(subscription.type_name.toLowerCase());
+          // Debug log available processors
+          this.logger.debug({
+            available_processors: Array.from(this.processors.keys()),
+            requested_type: subscription.type_name,
+            requested_type_lower: subscription.type_name.toLowerCase()
+          }, 'Available processors');
+
+          const processor = this.processors.get('boe');
           // DEBUG: Force use of BOE processor if no matching processor found
-          const debugProcessor = processor || this.processors.get('boe');
-          if (!debugProcessor) {
+          if (!processor) {
             this.logger.warn({
               type: subscription.type_name,
               subscription_details: {
                 id: subscription.subscription_id,
                 processing_id: subscription.processing_id,
                 metadata: subscription.metadata,
-              type_name: subscription.type_name,
-              using_debug_processor: !processor
+                type_name: subscription.type_name
               },
               available_processors: Array.from(this.processors.keys())
             }, 'No processor found for subscription type');
@@ -125,11 +130,10 @@ class SubscriptionProcessor {
           }
 
           const analysisStartTime = Date.now();
-          processingResult = await debugProcessor.analyzeContent(subscription.prompts);
+          processingResult = await processor.analyzeContent(subscription.prompts);
           this.logger.debug({
             analysis_time_ms: Date.now() - analysisStartTime,
-            matches_found: processingResult?.results?.length || 0,
-            using_debug_processor: !processor
+            matches_found: processingResult?.results?.length || 0
           }, 'Content analysis completed');
 
           if (processingResult?.results?.length > 0) {
@@ -138,11 +142,11 @@ class SubscriptionProcessor {
             const notificationValues = processingResult.results.map(result => ({
               user_id: subscription.user_id,
               subscription_id: subscription.subscription_id,
-              title: `${subscription.type_id.toUpperCase()} Match: ${result.matches[0]?.title || 'New match found'}`,
+              title: `${subscription.type_name} Match: ${result.matches[0]?.title || 'New match found'}`,
               content: result.matches[0]?.summary || 'Content match found',
               source_url: result.matches[0]?.links?.html || '',
               metadata: {
-                match_type: subscription.type_id,
+                match_type: subscription.type_name,
                 relevance_score: result.matches[0]?.relevance_score,
                 prompt: result.prompt
               }
