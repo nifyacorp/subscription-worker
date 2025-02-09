@@ -173,20 +173,67 @@ function createProcessRouter(subscriptionProcessor) {
   });
 
   router.post('/process-subscriptions', async (req, res) => {
+    let allSubscriptions;
     try {
+      // First get all subscriptions for debugging
+      const client = await subscriptionProcessor.pool.connect();
+      try {
+        logger.debug('Fetching all subscriptions for debugging');
+        allSubscriptions = await client.query(`
+          SELECT 
+            sp.id as processing_id,
+            sp.subscription_id,
+            sp.status,
+            sp.next_run_at,
+            sp.last_run_at,
+            sp.metadata,
+            sp.error,
+            s.user_id,
+            s.type_id,
+            s.active,
+            s.prompts,
+            s.frequency,
+            s.last_check_at,
+            s.created_at,
+            s.updated_at
+          FROM subscription_processing sp
+          JOIN subscriptions s ON s.id = sp.subscription_id
+          ORDER BY sp.next_run_at ASC
+        `);
+
+        logger.debug({
+          phase: 'debug_info',
+          total_subscriptions: allSubscriptions.rows.length,
+          subscriptions: allSubscriptions.rows,
+          timestamp: new Date().toISOString(),
+          query: 'SELECT * FROM subscription_processing sp JOIN subscriptions s ON s.id = sp.subscription_id'
+        }, 'Current state of all subscriptions');
+
+      } finally {
+        client.release();
+      }
+
       const results = await subscriptionProcessor.processSubscriptions();
       
       if (!results || results.length === 0) {
         return res.status(200).json({
           status: 'success',
-          message: 'No pending subscriptions to process'
+          message: 'No pending subscriptions to process',
+          debug: {
+            total_subscriptions: allSubscriptions.rows.length,
+            subscriptions: allSubscriptions.rows
+          }
         });
       }
 
       res.status(200).json({
         status: 'success',
         processed: results.length,
-        results: results
+        results: results,
+        debug: {
+          total_subscriptions: allSubscriptions.rows.length,
+          subscriptions: allSubscriptions.rows
+        }
       });
 
     } catch (error) {
