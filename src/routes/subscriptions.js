@@ -7,16 +7,41 @@ const router = express.Router();
 function createSubscriptionRouter(subscriptionProcessor) {
   router.get('/pending-subscriptions', async (req, res) => {
     try {
-      logger.debug('Fetching pending subscriptions');
+      logger.debug('Starting to fetch pending subscriptions');
       const client = await subscriptionProcessor.pool.connect();
       
       try {
+        logger.debug('Executing pending subscriptions query');
         const result = await client.query(`
           SELECT 
-            *
-          FROM subscription_processing
-          WHERE status = 'pending'
+            sp.*,
+            s.type_id,
+            s.active,
+            s.prompts,
+            s.frequency
+          FROM subscription_processing sp
+          JOIN subscriptions s ON s.id = sp.subscription_id
+          WHERE sp.status = 'pending'
+            AND sp.next_run_at <= NOW()
+            AND s.active = true
         `);
+
+        logger.debug({
+          rows_found: result.rows.length,
+          first_subscription: result.rows[0] ? {
+            id: result.rows[0].id,
+            subscription_id: result.rows[0].subscription_id,
+            status: result.rows[0].status,
+            next_run_at: result.rows[0].next_run_at,
+            active: result.rows[0].active,
+            type_id: result.rows[0].type_id
+          } : null,
+          query_conditions: {
+            status: 'pending',
+            next_run_at: 'current_timestamp',
+            active: true
+          }
+        }, 'Pending subscriptions query results');
 
         const response = {
           subscriptions: result.rows,
