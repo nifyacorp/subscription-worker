@@ -53,3 +53,5 @@ class BOEProcessor extends BaseProcessor {
     }
   }
 }
+
+module.exports = BOEProcessor;
