@@ -18,6 +18,7 @@ class SubscriptionProcessor {
   async processSubscriptions() {
     this.logger.debug({
       processors: Array.from(this.processors.keys()),
+      debug_mode: true,
       pool_total: this.pool.totalCount,
       pool_idle: this.pool.idleCount,
       pool_waiting: this.pool.waitingCount
@@ -39,12 +40,13 @@ class SubscriptionProcessor {
           sp.subscription_id,
           sp.metadata,
           s.user_id,
-          COALESCE(s.type_id::text, sp.metadata->>'type') as type_id,
+          st.name as type_name,
           s.prompts,
           s.frequency,
           s.last_check_at
         FROM subscription_processing sp
         JOIN subscriptions s ON s.id = sp.subscription_id
+        JOIN subscription_types st ON st.id = s.type_id
         WHERE sp.status = 'pending'
           AND sp.next_run_at <= NOW()
           AND s.active = true
@@ -83,7 +85,7 @@ class SubscriptionProcessor {
           this.logger.debug({ 
             subscription_id: subscription.subscription_id,
             processing_id: subscription.processing_id,
-            type: subscription.type_id || 'boe',
+            type: subscription.type_name,
             metadata: subscription.metadata,
             prompts_count: subscription.prompts?.length,
             frequency: subscription.frequency,
@@ -104,26 +106,30 @@ class SubscriptionProcessor {
 
           // Process based on subscription type
           let processingResult;
-          const processor = this.processors.get(subscription.type_id);
-          if (!processor) {
+          const processor = this.processors.get(subscription.type_name.toLowerCase());
+          // DEBUG: Force use of BOE processor if no matching processor found
+          const debugProcessor = processor || this.processors.get('boe');
+          if (!debugProcessor) {
             this.logger.warn({
-              type: subscription.type_id,
+              type: subscription.type_name,
               subscription_details: {
                 id: subscription.subscription_id,
                 processing_id: subscription.processing_id,
                 metadata: subscription.metadata,
-                type_id: subscription.type_id
+              type_name: subscription.type_name,
+              using_debug_processor: !processor
               },
               available_processors: Array.from(this.processors.keys())
             }, 'No processor found for subscription type');
-            throw new Error(`No processor available for type: ${subscription.type_id}`);
+            throw new Error(`No processor available for type: ${subscription.type_name}`);
           }
 
           const analysisStartTime = Date.now();
-          processingResult = await processor.analyzeContent(subscription.prompts);
+          processingResult = await debugProcessor.analyzeContent(subscription.prompts);
           this.logger.debug({
             analysis_time_ms: Date.now() - analysisStartTime,
-            matches_found: processingResult?.results?.length || 0
+            matches_found: processingResult?.results?.length || 0,
+            using_debug_processor: !processor
           }, 'Content analysis completed');
 
           if (processingResult?.results?.length > 0) {

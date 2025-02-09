@@ -12,27 +12,27 @@ async function getPendingSubscriptions(pool) {
   try {
     logger.debug({
       phase: 'query_start',
-      query: `
-        SELECT 
-          sp.id as processing_id,
-          sp.subscription_id,
-          sp.status,
-          sp.next_run_at,
-          sp.last_run_at,
-          sp.metadata,
-          sp.error,
-          s.user_id,
-          s.type_id,
-          s.active,
-          s.prompts,
-          s.frequency,
-          s.last_check_at,
-          s.created_at,
-          s.updated_at
-        FROM subscription_processing sp
-        JOIN subscriptions s ON s.id = sp.subscription_id
-        ORDER BY sp.next_run_at ASC
-      `.trim()
+      query: `SELECT 
+        sp.id as processing_id,
+        sp.subscription_id,
+        sp.status,
+        sp.next_run_at,
+        sp.last_run_at,
+        sp.metadata,
+        sp.error,
+        s.user_id,
+        s.type_id,
+        st.name as type_name,
+        s.active,
+        s.prompts,
+        s.frequency,
+        s.last_check_at,
+        s.created_at,
+        s.updated_at
+      FROM subscription_processing sp
+      JOIN subscriptions s ON s.id = sp.subscription_id
+      JOIN subscription_types st ON st.id = s.type_id
+      ORDER BY sp.next_run_at ASC`.trim()
     }, 'Executing pending subscriptions query');
 
     const queryStartTime = Date.now();
@@ -47,6 +47,7 @@ async function getPendingSubscriptions(pool) {
         sp.error,
         s.user_id,
         s.type_id,
+        st.name as type_name,
         s.active,
         s.prompts,
         s.frequency,
@@ -55,6 +56,7 @@ async function getPendingSubscriptions(pool) {
         s.updated_at
       FROM subscription_processing sp
       JOIN subscriptions s ON s.id = sp.subscription_id
+      JOIN subscription_types st ON st.id = s.type_id
       ORDER BY sp.next_run_at ASC
     `);
     const queryTime = Date.now() - queryStartTime;
