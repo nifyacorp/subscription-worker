@@ -13,28 +13,49 @@ async function getPendingSubscriptions(pool) {
     logger.debug({
       phase: 'query_start',
       query: `
-        SELECT sp.*, s.type_id, s.active, s.prompts, s.frequency
+        SELECT 
+          sp.id as processing_id,
+          sp.subscription_id,
+          sp.status,
+          sp.next_run_at,
+          sp.last_run_at,
+          sp.metadata,
+          sp.error,
+          s.user_id,
+          s.type_id,
+          s.active,
+          s.prompts,
+          s.frequency,
+          s.last_check_at,
+          s.created_at,
+          s.updated_at
         FROM subscription_processing sp
         JOIN subscriptions s ON s.id = sp.subscription_id
-        WHERE sp.status = 'pending'
-          AND sp.next_run_at <= NOW()
-          AND s.active = true
+        ORDER BY sp.next_run_at ASC
       `.trim()
     }, 'Executing pending subscriptions query');
 
     const queryStartTime = Date.now();
     const result = await client.query(`
       SELECT 
-        sp.*,
+        sp.id as processing_id,
+        sp.subscription_id,
+        sp.status,
+        sp.next_run_at,
+        sp.last_run_at,
+        sp.metadata,
+        sp.error,
+        s.user_id,
         s.type_id,
         s.active,
         s.prompts,
-        s.frequency
+        s.frequency,
+        s.last_check_at,
+        s.created_at,
+        s.updated_at
       FROM subscription_processing sp
       JOIN subscriptions s ON s.id = sp.subscription_id
-      WHERE sp.status = 'pending'
-        AND sp.next_run_at <= NOW()
-        AND s.active = true
+      ORDER BY sp.next_run_at ASC
     `);
     const queryTime = Date.now() - queryStartTime;
 
@@ -47,15 +68,12 @@ async function getPendingSubscriptions(pool) {
         subscription_id: result.rows[0].subscription_id,
         status: result.rows[0].status,
         next_run_at: result.rows[0].next_run_at,
+        last_run_at: result.rows[0].last_run_at,
         active: result.rows[0].active,
         type_id: result.rows[0].type_id,
-        metadata: result.rows[0].metadata
+        metadata: result.rows[0].metadata,
+        error: result.rows[0].error
       } : null,
-      query_conditions: {
-        status: 'pending',
-        next_run_at: 'current_timestamp',
-        active: true
-      },
       current_timestamp: new Date().toISOString()
     }, 'Pending subscriptions query results');
 
