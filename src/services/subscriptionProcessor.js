@@ -53,7 +53,7 @@ class SubscriptionProcessor {
         FROM subscription_processing sp
         JOIN subscriptions s ON s.id = sp.subscription_id
         JOIN subscription_types st ON st.id = s.type_id
-        WHERE sp.status = 'pending'
+        WHERE (sp.status = 'pending' OR (sp.status = 'failed' AND sp.next_run_at <= NOW()))
           AND s.active = true
           AND (
             s.frequency = 'immediate'
