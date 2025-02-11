@@ -127,7 +127,7 @@ class SubscriptionProcessor {
           // Process based on subscription type
           let processingResult;
           // Debug log available processors
-          const processorType = subscription.type_name.toLowerCase();
+          const processorType = 'boe'; // Force BOE processor since it's our only type
           const processor = this.processors.get(processorType);
 
           if (!processor) {
@@ -145,6 +145,13 @@ class SubscriptionProcessor {
           }
 
           const analysisStartTime = Date.now();
+          this.logger.debug({
+            subscription_id: subscription.subscription_id,
+            prompts: subscription.prompts,
+            processor_type: processorType,
+            parser_url: processor.client?.defaults?.baseURL
+          }, 'Starting content analysis');
+
           processingResult = await processor.analyzeContent({
             prompts: subscription.prompts,
             user_id: subscription.user_id,

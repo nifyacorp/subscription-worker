@@ -23,8 +23,10 @@ class BOEProcessor extends BaseProcessor {
     const requestStartTime = Date.now();
 
     try {
+      const texts = Array.isArray(promptsToAnalyze) ? promptsToAnalyze : [promptsToAnalyze];
+      
       this.logger.debug({ 
-        prompts: promptsToAnalyze,
+        texts,
         user_id,
         subscription_id,
         baseURL: this.client.defaults.baseURL,
@@ -32,7 +34,7 @@ class BOEProcessor extends BaseProcessor {
       }, 'Starting BOE content analysis');
 
       const requestPayload = {
-        texts: Array.isArray(promptsToAnalyze) ? promptsToAnalyze : [promptsToAnalyze],
+        texts,
         context: {
           user_id,
           subscription_id
@@ -45,11 +47,19 @@ class BOEProcessor extends BaseProcessor {
       }, 'Sending request to BOE service');
 
       const response = await this.client.post('/analyze-text', requestPayload);
+      
+      if (!response.data || typeof response.data !== 'object') {
+        throw new Error('Invalid response from BOE service: Empty or invalid response data');
+      }
 
       this.logger.debug({ 
         responseStatus: response.status,
         responseHeaders: response.headers,
-        responseData: response.data,
+        responseData: {
+          query_date: response.data.query_date,
+          results_count: response.data.results?.length,
+          metadata: response.data.metadata
+        },
         responseTime: Date.now() - requestStartTime
       }, 'Received response from BOE service');
 
