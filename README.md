@@ -17,12 +17,15 @@ A Node.js microservice that processes BOE (Boletín Oficial del Estado) subscrip
 │   │   ├── health.js    # Health check endpoint
 │   │   └── subscriptions.js # Subscription-related endpoints
 │   ├── services/        # Core business services
+│   │   ├── processors/  # Content processors
+│   │   │   ├── base.js  # Base processor class
+│   │   │   ├── boe.js   # BOE-specific processor
+│   │   │   └── registry.js # Processor type registry
 │   │   └── subscriptionProcessor.js # Main subscription processing logic
 │   └── index.js         # Application entry point
 ├── Dockerfile           # Container configuration
 ├── cloudbuild.yaml      # Cloud Build deployment configuration
-├── scheduler.yaml       # Cloud Scheduler job configuration
-└── package.json         # Project dependencies and scripts
+└── scheduler.yaml       # Cloud Scheduler job configuration
 ```
 
 ## Component Overview
@@ -32,30 +35,21 @@ A Node.js microservice that processes BOE (Boletín Oficial del Estado) subscrip
 - `logger.js`: Configures structured logging with Pino
 - `secrets.js`: Handles secure access to configuration via Secret Manager
 
-### Controllers (`src/controllers/`)
-- `boe-parser/`: Handles BOE document analysis and processing
-  - Communicates with external parser service
-  - Manages subscription state transitions
-  - Processes analysis results
-
-### Routes (`src/routes/`)
-- `health.js`: System health monitoring endpoint
-- `subscriptions.js`: API endpoints for subscription management
-  - GET `/pending-subscriptions`: Lists pending subscriptions
-  - POST `/process-subscriptions`: Triggers subscription processing
-
 ### Services (`src/services/`)
+- `processors/`: Content processing implementations
+  - `base.js`: Abstract base processor with common functionality
+  - `boe.js`: BOE-specific content processor
+  - `registry.js`: Registry for managing processor types
 - `subscriptionProcessor.js`: Core business logic
   - Coordinates subscription processing
   - Manages database transactions
   - Handles error recovery and retries
+  - Detailed debug logging for each processing step
 
-## Service URL
+## Service URLs
 
-The service is deployed and accessible at:
-```
-https://subscription-worker-415554190254.us-central1.run.app
-```
+- Main Service: `https://subscription-worker-415554190254.us-central1.run.app`
+- BOE Parser: `https://boe-parser-415554190254.us-central1.run.app`
 
 ## API Endpoints
 
@@ -69,25 +63,44 @@ Returns the service and database health status.
 ```http
 GET /pending-subscriptions
 ```
-Returns a list of pending BOE subscriptions that are ready for processing.
+Returns a list of all active subscriptions that are ready for processing.
 
 Response format:
 ```json
 {
-  "count": 2,
-  "subscriptions": [
-    {
-      "subscription_id": "uuid",
-      "status": "pending",
-      "last_run_at": "2024-02-04T11:00:00Z",
-      "next_run_at": "2024-02-04T11:05:00Z",
-      "metadata": {
-        "type": "boe",
-        "id": "boe-general"
-      },
-      "error": null
-    }
-  ]
+   "count": 2,
+   "subscriptions": [
+     {
+       "processing_id": "uuid",
+       "subscription_id": "uuid",
+       "metadata": {},
+       "user_id": "uuid",
+       "type_id": "boe",
+       "prompts": ["query1", "query2"],
+       "frequency": "daily",
+       "last_check_at": "2024-02-04T11:00:00Z"
+     }
+   ]
+}
+```
+
+### Process Single Subscription
+```http
+POST /process-subscription/:id
+```
+Processes a specific subscription by ID. The endpoint will:
+1. Lock the subscription for processing
+2. Update its status to 'processing'
+3. Process content based on subscription type
+4. Create notifications for matches
+5. Update processing status and schedule next run
+
+Response format:
+```json
+{
+  "status": "success",
+  "subscription_id": "uuid",
+  "matches_found": 2
 }
 ```
 
@@ -95,171 +108,101 @@ Response format:
 ```http
 POST /process-subscriptions
 ```
-Triggers the processing of pending BOE subscriptions.
+Triggers the processing of all pending subscriptions.
 
 Response format:
 ```json
 {
-  "status": "success"
+  "status": "success",
+  "processed": 2,
+  "results": [
+    {
+      "subscription_id": "uuid",
+      "status": "success",
+      "matches_found": 1
+    }
+  ]
 }
 ```
 
-## Overview
+### Debug BOE Analysis
+```http
+POST /boe/debug/analyze-boe
+Content-Type: application/json
 
-This service processes subscriptions by:
-1. Fetching pending subscriptions from a PostgreSQL database
-2. Analyzing BOE content using an external parser service
-3. Creating notifications based on the analysis results
-4. Managing subscription states and scheduling
+{
+  "prompts": [
+    "Find all resolutions about public employment",
+    "List announcements about environmental grants"
+  ]
+}
+```
+Test endpoint for direct BOE content analysis.
 
-## Architecture
+## Debugging and Monitoring
 
-### Runtime Environment
-- **Platform**: Google Cloud Run (serverless)
-- **Base Image**: Node.js 18 (slim)
-- **Database**: Cloud SQL (PostgreSQL)
+The service includes comprehensive debug logging for each processing step:
 
-### Key Dependencies
-- **Web Framework**: Express.js
-- **Database**: node-postgres (pg)
-- **Security**: 
-  - Cloud SQL Auth Proxy
-  - Cloud Secret Manager
-- **Logging**: Pino with structured JSON output
-- **HTTP Client**: Axios for external API calls
+1. Subscription Processing:
+   - Pool status and connection metrics
+   - Query execution times
+   - Processing status updates
+   - Content analysis timing
+   - Notification creation metrics
 
-## Database Schema
+2. BOE Processing:
+   - Service URL configuration
+   - Request/response timing
+   - Match statistics
+   - Error details
 
-### Tables
+3. Database Operations:
+   - Connection pool metrics
+   - Query execution times
+   - Transaction status
+   - Error handling
 
-- `subscription_processing`: Manages subscription states and scheduling
-  - `subscription_id`: Unique identifier
-  - `status`: Current status (pending/processing/completed/failed)
-  - `last_run_at`: Last execution timestamp
-  - `next_run_at`: Next scheduled execution
-  - `metadata`: JSON field with subscription details
-  - `error`: Error message if failed
+All logs are structured JSON format with:
+- Timestamps
+- Operation context
+- Performance metrics
+- Error details when applicable
 
-- `notifications`: Stores processing results
-  - `subscription_id`: Reference to subscription
-  - `content`: JSON content of processing results
-  - `created_at`: Creation timestamp
+## Testing
+
+Use curl to test the endpoints:
+
+```bash
+# Health check
+curl http://localhost:8080/_health
+
+# Get pending subscriptions
+curl http://localhost:8080/pending-subscriptions
+
+# Process all subscriptions
+curl -X POST http://localhost:8080/process-subscriptions
+
+# Process specific subscription
+curl -X POST http://localhost:8080/process-subscription/YOUR_SUBSCRIPTION_ID
+
+# Test BOE analysis
+curl -X POST http://localhost:8080/boe/debug/analyze-boe \
+  -H "Content-Type: application/json" \
+  -d '{
+    "prompts": [
+      "Find all resolutions about public employment",
+      "List announcements about environmental grants"
+    ]
+  }'
+```
 
 ## Environment Variables
 
 ```env
-PARSER_BASE_URL=https://your-parser-service-url
+PARSER_BASE_URL=https://boe-parser-415554190254.us-central1.run.app
 LOG_LEVEL=info
 PROJECT_ID=your-project-id
 ```
-
-## Cloud Run Configuration
-
-The service is deployed to Cloud Run with:
-- Memory: Default
-- CPU: Default
-- Concurrency: Default
-- HTTP/2: Enabled
-- Startup probe: TCP on port 8080
-
-## Deployment
-
-Deployment is handled through Cloud Build using:
-- `cloudbuild.yaml`: Main service deployment
-- `scheduler.yaml`: Cloud Scheduler job setup
-
-### Deploy Steps
-
-1. Build Docker image
-2. Push to Container Registry
-3. Deploy to Cloud Run
-4. Set up Cloud Scheduler (optional)
-
-```bash
-gcloud builds submit --config=cloudbuild.yaml
-gcloud builds submit --config=scheduler.yaml  # Optional: For scheduler setup
-```
-
-## Development
-
-### Project Setup
-```bash
-git clone <repository-url>
-cd subscription-processor
-```
-
-### Prerequisites
-
-- Node.js 18+
-- PostgreSQL
-- Google Cloud SDK
-
-### Local Setup
-
-1. Install dependencies:
-```bash
-npm install
-```
-
-2. Set up environment variables:
-```bash
-cp .env.example .env
-# Edit .env with your values
-```
-
-3. Start development server:
-```bash
-npm run dev
-```
-
-### Testing
-
-The service includes a health check endpoint:
-```bash
-curl http://localhost:8080/_health
-```
-
-## Monitoring
-
-### Logging
-- Structured JSON logs via Pino
-- Log levels configurable via LOG_LEVEL env var
-- Detailed error tracking with stack traces
-
-### Health Monitoring
-- HTTP health check endpoint at `/_health`
-- Database connectivity validation
-- Cloud Run health checks integration
-
-### Error Tracking
-- Comprehensive error capture
-- Detailed error context in logs
-- Automatic error recovery where possible
-
-## Security
-
-### Database Security
-- Cloud SQL Auth Proxy for encrypted connections
-- Connection pooling with configurable limits
-- Row-level security in PostgreSQL tables
-
-### Configuration Security
-- Sensitive data stored in Secret Manager
-- Environment-specific configurations
-- Secure secret rotation support
-
-### API Security
-- HTTPS-only endpoints
-- Cloud Run authentication (optional)
-- Rate limiting on API endpoints
-
-## Contributing
-
-1. Follow the existing code structure
-2. Add comprehensive logging
-3. Include error handling
-4. Update documentation as needed
-5. Test thoroughly before submitting changes
 
 ## License
 
