@@ -48,8 +48,11 @@ class SubscriptionProcessor {
         JOIN subscriptions s ON s.id = sp.subscription_id
         JOIN subscription_types st ON st.id = s.type_id
         WHERE sp.status = 'pending'
-          AND sp.next_run_at <= NOW()
           AND s.active = true
+          AND (
+            s.frequency = 'immediate'
+            OR sp.next_run_at <= NOW()
+          )
         FOR UPDATE SKIP LOCKED
       `);
 
