@@ -119,7 +119,6 @@ class BOEProcessor extends BaseProcessor {
         response: error.response?.data
       };
       throw enhancedError;
-      throw error;
     }
   }
 }

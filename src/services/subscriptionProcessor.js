@@ -33,6 +33,12 @@ class SubscriptionProcessor {
     
     try {
       const queryStartTime = Date.now();
+      
+      this.logger.debug({
+        query: `SELECT pending subscriptions WHERE status = 'pending' AND active = true AND (frequency = 'immediate' OR next_run_at <= NOW())`,
+        timestamp: new Date().toISOString()
+      }, 'Executing subscription query');
+
       // Get all pending subscriptions
       const result = await client.query(`
         SELECT 
@@ -59,6 +65,17 @@ class SubscriptionProcessor {
       // Log detailed subscription data
       if (result.rows.length > 0) {
         this.logger.debug({ 
+          query_result: {
+            total_rows: result.rows.length,
+            rows: result.rows.map(row => ({
+              processing_id: row.processing_id,
+              subscription_id: row.subscription_id,
+              type_name: row.type_name,
+              frequency: row.frequency,
+              status: row.status,
+              next_run_at: row.next_run_at
+            }))
+          },
           first_subscription: {
             ...result.rows[0],
             metadata_type: result.rows[0].metadata?.type,
@@ -110,26 +127,21 @@ class SubscriptionProcessor {
           // Process based on subscription type
           let processingResult;
           // Debug log available processors
-          this.logger.debug({
-            available_processors: Array.from(this.processors.keys()),
-            requested_type: subscription.type_name,
-            requested_type_lower: subscription.type_name.toLowerCase()
-          }, 'Available processors');
+          const processorType = subscription.type_name.toLowerCase();
+          const processor = this.processors.get(processorType);
 
-          const processor = this.processors.get('boe');
-          // DEBUG: Force use of BOE processor if no matching processor found
           if (!processor) {
             this.logger.warn({
-              type: subscription.type_name,
+              type: processorType,
               subscription_details: {
                 id: subscription.subscription_id,
                 processing_id: subscription.processing_id,
                 metadata: subscription.metadata,
-                type_name: subscription.type_name
+                type_name: processorType
               },
               available_processors: Array.from(this.processors.keys())
             }, 'No processor found for subscription type');
-            throw new Error(`No processor available for type: ${subscription.type_name}`);
+            throw new Error(`No processor available for type: ${processorType}`);
           }
 
           const analysisStartTime = Date.now();
