@@ -5,46 +5,91 @@ class BOEProcessor extends BaseProcessor {
   constructor(config) {
     super(config);
     
-    const baseURL = 'https://boe-parser-415554190254.us-central1.run.app';
+    const baseURL = process.env.PARSER_BASE_URL || 'https://boe-parser-415554190254.us-central1.run.app';
     this.logger.debug({ baseURL }, 'Initializing BOE processor with service URL');
     
     this.client = axios.create({
       baseURL,
+      timeout: 30000, // 30 second timeout
       headers: {
         'Content-Type': 'application/json',
         ...(config.apiKey && { 'Authorization': `Bearer ${config.apiKey}` })
       }
     });
+
+    // Add request interceptor for logging
+    this.client.interceptors.request.use((config) => {
+      this.logger.debug({
+        method: config.method,
+        url: config.url,
+        baseURL: config.baseURL,
+        headers: config.headers,
+        data: config.data
+      }, 'Outgoing request');
+      return config;
+    });
+
+    // Add response interceptor for logging
+    this.client.interceptors.response.use(
+      (response) => {
+        this.logger.debug({
+          status: response.status,
+          statusText: response.statusText,
+          headers: response.headers,
+          data_preview: {
+            query_date: response.data?.query_date,
+            results_count: response.data?.results?.length
+          }
+        }, 'Response received');
+        return response;
+      },
+      (error) => {
+        this.logger.error({
+          error: {
+            name: error.name,
+            message: error.message,
+            code: error.code,
+            response: error.response ? {
+              status: error.response.status,
+              statusText: error.response.statusText,
+              data: error.response.data,
+              headers: error.response.headers
+            } : undefined
+          }
+        }, 'Request failed');
+        throw error;
+      }
+    );
   }
 
   async analyzeContent(prompts) {
-    const context = Array.isArray(prompts) ? prompts : { prompts };
-    const { prompts: promptsToAnalyze, user_id, subscription_id } = context;
+    // Handle both array of strings and object with prompts
+    const { prompts: promptsToAnalyze, user_id, subscription_id } = 
+      Array.isArray(prompts) ? { prompts } : prompts;
+
     const requestStartTime = Date.now();
 
     try {
       const texts = Array.isArray(promptsToAnalyze) ? promptsToAnalyze : [promptsToAnalyze];
       
+      if (!texts.length) {
+        throw new Error('No prompts provided for analysis');
+      }
+
       this.logger.debug({ 
         texts,
         user_id,
         subscription_id,
-        baseURL: this.client.defaults.baseURL,
-        headers: this.client.defaults.headers
+        baseURL: this.client.defaults.baseURL
       }, 'Starting BOE content analysis');
 
       const requestPayload = {
         texts,
-        context: {
+        metadata: {
           user_id,
           subscription_id
         }
       };
-
-      this.logger.debug({ 
-        requestPayload,
-        endpoint: '/analyze-text'
-      }, 'Sending request to BOE service');
 
       const response = await this.client.post('/analyze-text', requestPayload);
       
@@ -52,24 +97,14 @@ class BOEProcessor extends BaseProcessor {
         throw new Error('Invalid response from BOE service: Empty or invalid response data');
       }
 
-      this.logger.debug({ 
-        responseStatus: response.status,
-        responseHeaders: response.headers,
-        responseData: {
-          query_date: response.data.query_date,
-          results_count: response.data.results?.length,
-          metadata: response.data.metadata
-        },
-        responseTime: Date.now() - requestStartTime
-      }, 'Received response from BOE service');
-
       const processingTime = Date.now() - requestStartTime;
       const result = {
         query_date: response.data.query_date,
         results: response.data.results,
         metadata: {
           ...response.data.metadata,
-          processing_time_ms: processingTime
+          processing_time_ms: processingTime,
+          request_id: response.headers['x-request-id']
         }
       };
 
@@ -77,56 +112,24 @@ class BOEProcessor extends BaseProcessor {
 
       this.logger.info({
         processingTime,
-        matchesFound: result.results.length
+        matchesFound: result.results.length,
+        request_id: result.metadata.request_id
       }, 'BOE analysis completed');
 
       return result;
     } catch (error) {
-      this.logger.error({
-        error: {
-          name: error.name,
-          message: error.message,
-          code: error.code,
-          stack: error.stack,
-          config: error.config ? {
-            url: error.config.url,
-            method: error.config.method,
-            headers: error.config.headers,
-            data: error.config.data
-          } : undefined,
-          response: error.response ? {
-            status: error.response.status,
-            statusText: error.response.statusText,
-            data: error.response.data,
-            headers: error.response.headers
-          } : undefined
-        },
-        request: {
-          baseURL: this.client.defaults.baseURL,
-          headers: this.client.defaults.headers,
-          payload: {
-            texts: Array.isArray(promptsToAnalyze) ? promptsToAnalyze : [promptsToAnalyze],
-            context: { user_id, subscription_id }
-          }
-        },
-        timing: {
-          started_at: new Date(requestStartTime).toISOString(),
-          duration_ms: Date.now() - requestStartTime
-        },
-        prompts: promptsToAnalyze,
-        user_id,
-        subscription_id
-      }, 'BOE analysis failed');
-      
       // Rethrow with more context
-      const enhancedError = new Error(`BOE analysis failed: ${error.message}`);
+      const errorMessage = error.response?.data?.error || error.message;
+      const enhancedError = new Error(`BOE analysis failed: ${errorMessage}`);
       enhancedError.originalError = error;
       enhancedError.context = {
         request: {
           url: this.client.defaults.baseURL + '/analyze-text',
           payload: requestPayload
         },
-        response: error.response?.data
+        response: error.response?.data,
+        status: error.response?.status,
+        request_id: error.response?.headers?.['x-request-id']
       };
       throw enhancedError;
     }
