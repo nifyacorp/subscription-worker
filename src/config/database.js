@@ -99,9 +99,8 @@ async function testDatabaseConnection(pool) {
 
   try {
     const testStartTime = Date.now();
-    const [versionResult, settingsResult, tablesResult] = await Promise.all([
+    const [versionResult, tablesResult] = await Promise.all([
       client.query('SELECT version()'),
-      client.query('SHOW ALL'),
       client.query(`
         SELECT table_name, 
                (SELECT count(*) FROM information_schema.columns WHERE table_name = t.table_name) as column_count
@@ -116,15 +115,13 @@ async function testDatabaseConnection(pool) {
       testDuration,
       pgVersion: versionResult.rows[0]?.version,
       tableCount: tablesResult.rows?.length,
-      settingsCount: settingsResult.rows?.length,
       tables: tablesResult.rows.map(r => r.table_name),
       total_duration: Date.now() - startTime
     }, 'Database connection test completed successfully');
 
     return {
       version: versionResult.rows[0]?.version,
-      tables: tablesResult.rows,
-      settings: settingsResult.rows
+      tables: tablesResult.rows
     };
   } catch (error) {
     logger.error({

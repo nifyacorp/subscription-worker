@@ -33,6 +33,12 @@ class SubscriptionProcessor {
     
     try {
       const queryStartTime = Date.now();
+      
+      this.logger.debug({
+        query: `SELECT pending subscriptions WHERE status = 'pending' AND active = true AND (frequency = 'immediate' OR next_run_at <= NOW())`,
+        timestamp: new Date().toISOString()
+      }, 'Executing subscription query');
+
       // Get all pending subscriptions
       const result = await client.query(`
         SELECT 
@@ -47,15 +53,29 @@ class SubscriptionProcessor {
         FROM subscription_processing sp
         JOIN subscriptions s ON s.id = sp.subscription_id
         JOIN subscription_types st ON st.id = s.type_id
-        WHERE sp.status = 'pending'
-          AND sp.next_run_at <= NOW()
+        WHERE (sp.status = 'pending' OR (sp.status = 'failed' AND sp.next_run_at <= NOW()))
           AND s.active = true
+          AND (
+            s.frequency = 'immediate'
+            OR sp.next_run_at <= NOW()
+          )
         FOR UPDATE SKIP LOCKED
       `);
 
       // Log detailed subscription data
       if (result.rows.length > 0) {
         this.logger.debug({ 
+          query_result: {
+            total_rows: result.rows.length,
+            rows: result.rows.map(row => ({
+              processing_id: row.processing_id,
+              subscription_id: row.subscription_id,
+              type_name: row.type_name,
+              frequency: row.frequency,
+              status: row.status,
+              next_run_at: row.next_run_at
+            }))
+          },
           first_subscription: {
             ...result.rows[0],
             metadata_type: result.rows[0].metadata?.type,
@@ -107,30 +127,36 @@ class SubscriptionProcessor {
           // Process based on subscription type
           let processingResult;
           // Debug log available processors
-          this.logger.debug({
-            available_processors: Array.from(this.processors.keys()),
-            requested_type: subscription.type_name,
-            requested_type_lower: subscription.type_name.toLowerCase()
-          }, 'Available processors');
+          const processorType = 'boe'; // Force BOE processor since it's our only type
+          const processor = this.processors.get(processorType);
 
-          const processor = this.processors.get('boe');
-          // DEBUG: Force use of BOE processor if no matching processor found
           if (!processor) {
             this.logger.warn({
-              type: subscription.type_name,
+              type: processorType,
               subscription_details: {
                 id: subscription.subscription_id,
                 processing_id: subscription.processing_id,
                 metadata: subscription.metadata,
-                type_name: subscription.type_name
+                type_name: processorType
               },
               available_processors: Array.from(this.processors.keys())
             }, 'No processor found for subscription type');
-            throw new Error(`No processor available for type: ${subscription.type_name}`);
+            throw new Error(`No processor available for type: ${processorType}`);
           }
 
           const analysisStartTime = Date.now();
-          processingResult = await processor.analyzeContent(subscription.prompts);
+          this.logger.debug({
+            subscription_id: subscription.subscription_id,
+            prompts: subscription.prompts,
+            processor_type: processorType,
+            parser_url: processor.client?.defaults?.baseURL
+          }, 'Starting content analysis');
+
+          processingResult = await processor.analyzeContent({
+            prompts: subscription.prompts,
+            user_id: subscription.user_id,
+            subscription_id: subscription.subscription_id
+          });
           this.logger.debug({
             analysis_time_ms: Date.now() - analysisStartTime,
             matches_found: processingResult?.results?.length || 0
@@ -221,25 +247,72 @@ class SubscriptionProcessor {
           });
 
         } catch (error) {
+          const errorContext = {
+            error: {
+              name: error.name,
+              code: error.code,
+              message: error.message,
+              stack: error.stack,
+              response: error.response ? {
+                status: error.response.status,
+                statusText: error.response.statusText,
+                data: error.response.data
+              } : undefined
+            },
+            subscription: {
+              id: subscription.subscription_id,
+              processing_id: subscription.processing_id,
+              type: subscription.type_name,
+              user_id: subscription.user_id,
+              frequency: subscription.frequency,
+              prompts_count: subscription.prompts?.length
+            },
+            timing: {
+              last_check_at: subscription.last_check_at,
+              last_run_at: subscription.last_run_at,
+              next_run_at: subscription.next_run_at
+            },
+            system: {
+              processors: Array.from(this.processors.keys()),
+              pool_stats: {
+                total: this.pool.totalCount,
+                idle: this.pool.idleCount,
+                waiting: this.pool.waitingCount
+              }
+            }
+          };
+
           this.logger.error({ 
-            error,
-            subscription_id: subscription.subscription_id,
-            error_name: error.name,
-            error_code: error.code,
-            error_message: error.message,
-            stack: error.stack
+            ...errorContext
           }, 'Failed to process subscription, continuing with next');
 
           // Update to failed status
           const failureStartTime = Date.now();
+          const errorMessage = error.response?.data?.error || error.message;
           await client.query(`
             UPDATE subscription_processing
             SET 
               status = 'failed',
-              error = $1,
+              error = $1::text,
+              metadata = jsonb_set(
+                metadata,
+                '{last_error}',
+                $3::jsonb
+              ),
               next_run_at = NOW() + INTERVAL '5 minutes'
             WHERE id = $2
-          `, [error.message, subscription.processing_id]);
+          `, [
+            errorMessage,
+            subscription.processing_id,
+            JSON.stringify({
+              timestamp: new Date().toISOString(),
+              error: errorContext.error,
+              context: {
+                subscription: errorContext.subscription,
+                timing: errorContext.timing
+              }
+            })
+          ]);
 
           this.logger.debug({
             failure_update_time_ms: Date.now() - failureStartTime
@@ -248,7 +321,12 @@ class SubscriptionProcessor {
           processingResults.push({
             subscription_id: subscription.subscription_id,
             status: 'error',
-            error: error.message
+            error: errorMessage,
+            error_details: {
+              type: error.name,
+              code: error.code,
+              response_status: error.response?.status
+            }
           });
         }
       }
@@ -264,13 +342,34 @@ class SubscriptionProcessor {
       return processingResults;
 
     } catch (error) {
+      const batchErrorContext = {
+        error: {
+          name: error.name,
+          code: error.code,
+          message: error.message,
+          stack: error.stack,
+          response: error.response ? {
+            status: error.response.status,
+            statusText: error.response.statusText,
+            data: error.response.data
+          } : undefined
+        },
+        timing: {
+          start_time: startTime,
+          processing_time_ms: Date.now() - startTime
+        },
+        system: {
+          processors: Array.from(this.processors.keys()),
+          pool_stats: {
+            total: this.pool.totalCount,
+            idle: this.pool.idleCount,
+            waiting: this.pool.waitingCount
+          }
+        }
+      };
+
       this.logger.error({
-        error,
-        error_name: error.name,
-        error_code: error.code,
-        error_message: error.message,
-        stack: error.stack,
-        processing_time: Date.now() - startTime
+        ...batchErrorContext
       }, 'Failed to process subscriptions batch');
       throw error;
     } finally {
