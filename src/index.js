@@ -11,7 +11,7 @@ const createBOERouter = require('./routes/boe');
 const createHealthRouter = require('./routes/health');
 const createSubscriptionRouter = require('./routes/subscriptions/index');
 
-const REQUIRED_ENV_VARS = ['PROJECT_ID', 'PARSER_BASE_URL'];
+const REQUIRED_ENV_VARS = ['PROJECT_ID'];
 const logger = getLogger('server');
 const expressLogger = expressPino({ logger });
 

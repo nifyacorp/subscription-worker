@@ -1,11 +1,13 @@
 const axios = require('axios');
 const BaseProcessor = require('./base');
 
+const BOE_PARSER_URL = 'https://boe-parser-415554190254.us-central1.run.app';
+
 class BOEProcessor extends BaseProcessor {
   constructor(config) {
     super(config);
     
-    const baseURL = process.env.PARSER_BASE_URL || 'https://boe-parser-415554190254.us-central1.run.app';
+    const baseURL = BOE_PARSER_URL;
     this.logger.debug({ baseURL }, 'Initializing BOE processor with service URL');
     
     this.client = axios.create({
