@@ -81,7 +81,7 @@ function createProcessRouter(subscriptionProcessor) {
         FROM subscription_processing sp
         JOIN subscriptions s ON s.id = sp.subscription_id
         WHERE sp.subscription_id = $1
-          AND sp.status = 'pending'
+          AND (sp.status = 'pending' OR (sp.status = 'failed' AND sp.next_run_at <= NOW()))
           AND sp.next_run_at <= NOW()
           AND s.active = true
         FOR UPDATE SKIP LOCKED
@@ -153,6 +153,9 @@ function createProcessRouter(subscriptionProcessor) {
             s.updated_at
           FROM subscription_processing sp
           JOIN subscriptions s ON s.id = sp.subscription_id
+          WHERE (sp.status = 'pending' OR (sp.status = 'failed' AND sp.next_run_at <= NOW()))
+            AND sp.next_run_at <= NOW()
+            AND s.active = true
           ORDER BY sp.next_run_at ASC
         `);
 
