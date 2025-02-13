@@ -8,17 +8,20 @@ const { initializePool } = require('./config/database');
 const { getSecret, initialize: initializeSecrets } = require('./config/secrets');
 const SubscriptionProcessor = require('./services/subscriptionProcessor');
 const createBOERouter = require('./routes/boe');
-const createHealthRouter = require('./routes/health');
+const createHealthRouter = require('./routes/health'); 
 const createSubscriptionRouter = require('./routes/subscriptions/index');
 
-const REQUIRED_ENV_VARS = ['PROJECT_ID'];
 const logger = getLogger('server');
 const expressLogger = expressPino({ logger });
 
 function validateEnvironment() {
-  const missingVars = REQUIRED_ENV_VARS.filter(varName => !process.env[varName]);
-  if (missingVars.length > 0) {
-    throw new Error(`Missing required environment variables: ${missingVars.join(', ')}`);
+  // Set PROJECT_ID from GOOGLE_CLOUD_PROJECT if not already set
+  if (!process.env.PROJECT_ID) {
+    process.env.PROJECT_ID = process.env.GOOGLE_CLOUD_PROJECT;
+  }
+
+  if (!process.env.PROJECT_ID) {
+    throw new Error('Missing required environment variable: PROJECT_ID or GOOGLE_CLOUD_PROJECT');
   }
 }
 
@@ -53,7 +56,7 @@ async function startServer() {
     logger.debug({
       phase: 'startup',
       node_env: process.env.NODE_ENV,
-      project_id: process.env.PROJECT_ID,
+      project_id: process.env.PROJECT_ID || process.env.GOOGLE_CLOUD_PROJECT,
       parser_base_url: process.env.PARSER_BASE_URL,
       log_level: process.env.LOG_LEVEL
     }, 'Starting server with environment configuration');
