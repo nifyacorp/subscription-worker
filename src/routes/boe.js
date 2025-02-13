@@ -1,6 +1,6 @@
 const express = require('express');
 const { getLogger } = require('../config/logger');
-const BOEProcessor = require('../services/boe/processor');
+const BOEProcessor = require('../services/processors/boe');
 
 const logger = getLogger('boe-route');
 const router = express.Router();
