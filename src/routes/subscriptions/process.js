@@ -1,4 +1,4 @@
-const { getLogger } = require('../../config/logger');
+const { getLogger } = require('../../config/logger'); 
 const logger = getLogger('subscription-process');
 
 const SUBSCRIPTION_STATES = {
@@ -65,7 +65,7 @@ function createProcessRouter(subscriptionProcessor) {
 
   router.post('/process-subscription/:id', async (req, res) => {
     const { id } = req.params;
-    const client = await subscriptionProcessor.pool.connect();
+    const client = await subscriptionProcessor.dbService.pool.connect();
 
     try {
       const subscriptionResult = await client.query(`
@@ -150,7 +150,9 @@ function createProcessRouter(subscriptionProcessor) {
             s.updated_at
           FROM subscription_processing sp
           JOIN subscriptions s ON s.id = sp.subscription_id
-          WHERE s.active = true
+          WHERE (sp.status = 'pending' OR (sp.status = 'failed' AND sp.next_run_at <= NOW()))
+            AND s.active = true
+            AND sp.next_run_at <= NOW()
           ORDER BY sp.next_run_at ASC
         `);
 
