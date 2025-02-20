@@ -26,6 +26,10 @@ function validateEnvironment() {
 }
 
 function setupGracefulShutdown(server, pool) {
+  // Remove existing listeners
+  process.removeAllListeners('SIGTERM');
+  process.removeAllListeners('SIGINT');
+
   const shutdown = async (signal) => {
     logger.info({ signal }, 'Shutdown signal received, closing server...');
     
