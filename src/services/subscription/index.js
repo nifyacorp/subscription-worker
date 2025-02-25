@@ -52,147 +52,252 @@ class SubscriptionProcessor {
    * @returns {Promise<object>} Processing result
    */
   async processSubscription(subscriptionId) {
-    const logger = getLogger('subscription-processor');
-    logger.debug('Processing subscription by ID', { subscription_id: subscriptionId });
-    
-    if (!subscriptionId) {
-      logger.error('No subscription ID provided');
-      throw new Error('Subscription ID is required');
+    this.logger.info('Processing subscription', { subscription_id: subscriptionId });
+
+    // Check for a valid subscription id
+    if (!subscriptionId || subscriptionId === 'undefined') {
+      this.logger.error('Invalid subscription id provided', { subscription_id: subscriptionId });
+      throw new Error('Invalid subscription id provided');
     }
-    
+
+    let knex;
     try {
-      // First, get the subscription details from the database
-      const client = await this.pool.connect();
+      knex = await this.connectToDatabase();
+
+      // Query for the subscription
+      let subscription = await knex('subscriptions')
+        .where('id', subscriptionId)
+        .first();
+
+      // Check if the subscription exists
+      if (!subscription) {
+        this.logger.error('Subscription not found', { subscription_id: subscriptionId });
+        throw new Error(`Subscription not found for id: ${subscriptionId}`);
+      }
+
+      // Check if the subscription is active
+      if (!subscription.is_active) {
+        this.logger.warn('Subscription is not active', { subscription_id: subscriptionId });
+        throw new Error(`Subscription is not active for id: ${subscriptionId}`);
+      }
+
+      this.logger.debug('Found active subscription', {
+        subscription_id: subscriptionId,
+        type_slug: subscription.type_slug,
+        type_id: subscription.type_id,
+        is_active: subscription.is_active
+      });
+
+      // Prepare subscription data for processing
+      let subscriptionData = {
+        subscription_id: subscription.id,
+        user_id: subscription.user_id,
+        created_at: subscription.created_at,
+        metadata: subscription.metadata || {}
+      };
+
+      // Extract prompts from metadata if present
+      if (subscription.metadata) {
+        try {
+          // If metadata is a string, try to parse it
+          if (typeof subscription.metadata === 'string') {
+            try {
+              subscriptionData.metadata = JSON.parse(subscription.metadata);
+            } catch (parseError) {
+              this.logger.warn('Failed to parse metadata as JSON', {
+                subscription_id: subscriptionId,
+                error: parseError.message,
+                metadata: subscription.metadata.substring(0, 100)
+              });
+            }
+          }
+          
+          // Add prompts directly to the subscription data for easier access by processors
+          if (subscriptionData.metadata && subscriptionData.metadata.prompts) {
+            subscriptionData.prompts = subscriptionData.metadata.prompts;
+            this.logger.debug('Extracted prompts from metadata', {
+              subscription_id: subscriptionId,
+              prompt_count: Array.isArray(subscriptionData.prompts) ? subscriptionData.prompts.length : 'not an array'
+            });
+          }
+        } catch (metadataError) {
+          this.logger.error('Error processing subscription metadata', {
+            subscription_id: subscriptionId,
+            error: metadataError.message
+          });
+        }
+      }
+
+      // Get the processor based on the subscription type
+      const processor = this.getProcessorForSubscription(subscription);
       
-      try {
-        const result = await client.query(
-          `SELECT 
-            s.id as subscription_id, 
-            s.user_id, 
-            s.type_id, 
-            s.prompts, 
-            s.frequency,
-            s.active,
-            s.last_check_at,
-            s.metadata,
-            st.slug as type_slug
-          FROM subscriptions s
-          JOIN subscription_types st ON s.type_id = st.id
-          WHERE s.id = $1`,
-          [subscriptionId]
-        );
-        
-        if (result.rowCount === 0) {
-          logger.error('Subscription not found', { subscription_id: subscriptionId });
-          throw new Error(`Subscription with ID ${subscriptionId} not found`);
-        }
-        
-        const subscription = result.rows[0];
-        
-        // Check if subscription is active
-        if (!subscription.active) {
-          logger.warn('Attempting to process inactive subscription', { subscription_id: subscriptionId });
-          return { status: 'skipped', message: 'Subscription is inactive' };
-        }
-        
-        // Create a processing record for this run
-        const processingInsert = await client.query(
-          `INSERT INTO subscription_processings
-           (subscription_id, status, metadata)
-           VALUES ($1, 'pending', $2)
-           RETURNING id`,
-          [subscriptionId, JSON.stringify(subscription.metadata || {})]
-        );
-        
-        const processingId = processingInsert.rows[0].id;
-        
-        logger.debug('Created processing record', {
+      if (!processor) {
+        this.logger.error('No processor found for subscription type', {
           subscription_id: subscriptionId,
-          processing_id: processingId
-        });
-        
-        // Prepare subscription data with all necessary information
-        const subscriptionData = {
-          subscription_id: subscription.subscription_id,
-          processing_id: processingId,
-          user_id: subscription.user_id,
-          type_id: subscription.type_id,
           type_slug: subscription.type_slug,
-          prompts: subscription.prompts,
-          frequency: subscription.frequency,
-          metadata: subscription.metadata || {}
-        };
+          type_id: subscription.type_id,
+          available_processors: Object.keys(this.processors)
+        });
         
-        // Determine which processor to use
-        let processor = null;
-        if (subscription.type_slug === 'boe') {
-          processor = this.boeController;
-        } else {
-          // Try to find a processor based on the type_id
-          processor = this.processorMap[subscription.type_id] || this.processorMap[subscription.type_slug];
-        }
-        
-        if (!processor) {
-          logger.error('No processor available for subscription type', {
-            subscription_id: subscriptionId,
-            type_id: subscription.type_id,
-            type_slug: subscription.type_slug
-          });
-          
-          // Update processing record to error
-          await client.query(
-            `UPDATE subscription_processings
-             SET status = 'error', result = $1, updated_at = NOW()
-             WHERE id = $2`,
-            [
-              JSON.stringify({
-                error: 'No processor available for this subscription type',
-                timestamp: new Date().toISOString()
-              }),
-              processingId
-            ]
-          );
-          
-          throw new Error(`No processor available for subscription type ${subscription.type_slug || subscription.type_id}`);
-        }
-        
-        logger.debug('Delegating to process subscription async', {
+        await this.updateProcessingError(knex, subscriptionId, 'No processor found for subscription type');
+        throw new Error(`No processor found for subscription type: ${subscription.type_slug}`);
+      }
+
+      this.logger.debug('Using processor for subscription', {
+        subscription_id: subscriptionId,
+        processor_type: processor.constructor.name,
+        has_process_method: typeof processor.processSubscription === 'function'
+      });
+
+      // Check if the processor has the required method
+      if (typeof processor.processSubscription !== 'function') {
+        const errorMessage = `Processor does not have processSubscription method`;
+        this.logger.error(errorMessage, {
           subscription_id: subscriptionId,
-          processor_type: processor.constructor.name || typeof processor
+          processor_type: processor.constructor.name
         });
         
+        await this.updateProcessingError(knex, subscriptionId, errorMessage);
+        throw new Error(errorMessage);
+      }
+
+      try {
         // Process the subscription asynchronously
-        const processPromise = processSubscriptionAsync(subscriptionData, {
-          pool: this.pool,
-          boeController: processor
+        this.logger.info('Starting subscription processing', {
+          subscription_id: subscriptionId,
+          processor: processor.constructor.name
         });
         
-        // We don't await this promise - it will run in the background
-        processPromise.catch(error => {
-          logger.error('Unhandled error in async processing', {
+        // Call the processor to process the subscription
+        const result = await processor.processSubscription(subscriptionData);
+        
+        this.logger.info('Subscription processing completed', {
+          subscription_id: subscriptionId,
+          status: result?.status || 'unknown',
+          matches_count: result?.matches?.length || 0,
+          entries_count: result?.entries?.length || 0,
+          result_available: !!result
+        });
+        
+        // Check if the processor returned an error status
+        if (result && result.status === 'error') {
+          this.logger.warn('Processor returned error status', {
             subscription_id: subscriptionId,
-            error: error.message,
-            stack: error.stack
+            error: result.error,
+            processor: processor.constructor.name
           });
+          
+          await this.updateProcessingError(knex, subscriptionId, result.error || 'Unknown processor error');
+          return {
+            status: 'error',
+            error: result.error || 'Unknown processor error',
+            subscription_id: subscriptionId
+          };
+        }
+        
+        // Update the processing record to completed status
+        await this.updateProcessingSuccess(knex, subscriptionId);
+        
+        return result;
+      } catch (processingError) {
+        this.logger.error('Error during subscription processing', {
+          subscription_id: subscriptionId,
+          error: processingError.message,
+          stack: processingError.stack
         });
         
-        return {
-          status: 'accepted',
-          message: 'Subscription processing started',
-          processing_id: processingId
-        };
-        
-      } finally {
-        client.release();
-        logger.debug('Database client released');
+        await this.updateProcessingError(knex, subscriptionId, processingError.message);
+        throw processingError;
       }
     } catch (error) {
-      logger.error('Error processing subscription', {
+      this.logger.error('Error in processSubscription', {
         subscription_id: subscriptionId,
         error: error.message,
         stack: error.stack
       });
       throw error;
+    } finally {
+      if (knex) {
+        try {
+          await knex.destroy();
+        } catch (err) {
+          this.logger.error('Error destroying database connection', {
+            error: err.message
+          });
+        }
+      }
+    }
+  }
+
+  /**
+   * Update processing record with error status
+   * @param {Object} knex - Knex database connection
+   * @param {string} subscriptionId - Subscription ID
+   * @param {string} errorMessage - Error message
+   */
+  async updateProcessingError(knex, subscriptionId, errorMessage) {
+    try {
+      // Find the latest processing record for this subscription
+      const processing = await knex('subscription_processings')
+        .where('subscription_id', subscriptionId)
+        .orderBy('created_at', 'desc')
+        .first();
+      
+      if (processing) {
+        await knex('subscription_processings')
+          .where('id', processing.id)
+          .update({
+            status: 'error',
+            updated_at: new Date(),
+            error: errorMessage?.substring(0, 255) || 'Unknown error'
+          });
+        
+        this.logger.debug('Updated processing record with error status', {
+          subscription_id: subscriptionId,
+          processing_id: processing.id,
+          error: errorMessage
+        });
+      }
+    } catch (error) {
+      this.logger.error('Error updating processing record with error status', {
+        subscription_id: subscriptionId,
+        error: error.message
+      });
+    }
+  }
+  
+  /**
+   * Update processing record with success status
+   * @param {Object} knex - Knex database connection
+   * @param {string} subscriptionId - Subscription ID
+   */
+  async updateProcessingSuccess(knex, subscriptionId) {
+    try {
+      // Find the latest processing record for this subscription
+      const processing = await knex('subscription_processings')
+        .where('subscription_id', subscriptionId)
+        .orderBy('created_at', 'desc')
+        .first();
+      
+      if (processing) {
+        await knex('subscription_processings')
+          .where('id', processing.id)
+          .update({
+            status: 'completed',
+            updated_at: new Date(),
+            error: null
+          });
+        
+        this.logger.debug('Updated processing record with completed status', {
+          subscription_id: subscriptionId,
+          processing_id: processing.id
+        });
+      }
+    } catch (error) {
+      this.logger.error('Error updating processing record with completed status', {
+        subscription_id: subscriptionId,
+        error: error.message
+      });
     }
   }
 

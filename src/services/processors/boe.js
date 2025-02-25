@@ -97,50 +97,94 @@ class BOEProcessor extends BaseProcessor {
     }
     
     this.logger.debug('Processing BOE subscription', {
-      subscription_id: subscription.subscription_id,
-      user_id: subscription.user_id,
-      prompts: Array.isArray(subscription.prompts) ? subscription.prompts : 'not an array',
+      subscription_id: subscription.subscription_id || 'unknown',
+      user_id: subscription.user_id || 'unknown',
+      subscription_type: typeof subscription,
       subscription_fields: Object.keys(subscription || {})
     });
     
-    // Extract prompts from the subscription
+    // Extract prompts from the subscription - handle all possible locations and missing data
     let prompts = [];
-    if (Array.isArray(subscription.prompts) && subscription.prompts.length > 0) {
-      prompts = subscription.prompts;
-    } else if (subscription.metadata && Array.isArray(subscription.metadata.prompts)) {
-      prompts = subscription.metadata.prompts;
-    } else {
-      this.logger.warn('No prompts found in subscription', {
-        subscription_id: subscription.subscription_id,
-        subscription_data: JSON.stringify(subscription).substring(0, 200) + '...'
+    
+    try {
+      if (Array.isArray(subscription.prompts) && subscription.prompts.length > 0) {
+        prompts = subscription.prompts;
+        this.logger.debug('Using prompts from subscription.prompts', { count: prompts.length });
+      } else if (subscription.metadata && Array.isArray(subscription.metadata.prompts) && subscription.metadata.prompts.length > 0) {
+        prompts = subscription.metadata.prompts;
+        this.logger.debug('Using prompts from subscription.metadata.prompts', { count: prompts.length });
+      } else {
+        // Try to retrieve prompts from other places
+        if (typeof subscription.prompts === 'string') {
+          try {
+            // Try to parse string as JSON
+            const parsedPrompts = JSON.parse(subscription.prompts);
+            if (Array.isArray(parsedPrompts) && parsedPrompts.length > 0) {
+              prompts = parsedPrompts;
+              this.logger.debug('Using prompts parsed from string', { count: prompts.length });
+            }
+          } catch (parseError) {
+            // If it's not JSON, use the string as a single prompt
+            prompts = [subscription.prompts];
+            this.logger.debug('Using prompts string as single prompt');
+          }
+        }
+      }
+    } catch (promptError) {
+      this.logger.error('Error extracting prompts from subscription', {
+        error: promptError.message,
+        subscription_preview: JSON.stringify(subscription).substring(0, 200) + '...'
       });
     }
     
     // If still no prompts, use a default
     if (!prompts.length) {
+      const defaultPrompt = 'Información general del BOE';
       this.logger.warn('Using default prompt as none was provided', {
-        subscription_id: subscription.subscription_id
+        subscription_id: subscription.subscription_id || 'unknown',
+        default_prompt: defaultPrompt
       });
-      prompts = ['Información general del BOE'];
+      prompts = [defaultPrompt];
     }
     
     try {
       // Analyze BOE content based on prompts
+      this.logger.info('Sending prompts to BOE analyzer', {
+        prompt_count: prompts.length,
+        first_prompt: prompts[0]
+      });
+      
       const analysisResult = await this.analyzeContent(prompts);
       
       this.logger.info('BOE analysis completed successfully', {
-        subscription_id: subscription.subscription_id,
-        result_count: analysisResult?.entries?.length || 0
+        subscription_id: subscription.subscription_id || 'unknown',
+        result_count: analysisResult?.entries?.length || 0,
+        status: analysisResult?.status || 'unknown'
       });
       
-      return analysisResult;
+      return {
+        status: 'success',
+        timestamp: new Date().toISOString(),
+        subscription_id: subscription.subscription_id || 'unknown',
+        entries: analysisResult?.entries || [],
+        matches: analysisResult?.entries || []
+      };
     } catch (error) {
       this.logger.error('Error processing BOE subscription', {
-        subscription_id: subscription.subscription_id,
+        subscription_id: subscription.subscription_id || 'unknown',
         error: error.message,
         stack: error.stack
       });
-      throw error;
+      
+      // Return a structured error response instead of throwing
+      return {
+        status: 'error',
+        timestamp: new Date().toISOString(),
+        subscription_id: subscription.subscription_id || 'unknown',
+        error: error.message,
+        entries: [],
+        matches: []
+      };
     }
   }
   
@@ -166,16 +210,9 @@ class BOEProcessor extends BaseProcessor {
       
       this.logger.debug('Sending request to BOE API', {
         endpoint: `${this.apiUrl}/analyze`,
-        body: JSON.stringify(requestBody),
+        body_preview: JSON.stringify(requestBody).substring(0, 200),
         api_key_present: !!this.apiKey,
-        request_data: {
-          url: `${this.apiUrl}/analyze`,
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'x-api-key': this.apiKey ? this.apiKey.substring(0, 3) + '...' : 'not-set'
-          }
-        }
+        api_url: this.apiUrl
       });
       
       // Make the request to the BOE API
@@ -194,8 +231,23 @@ class BOEProcessor extends BaseProcessor {
       this.logger.debug('Received response from BOE API', {
         status: response.status,
         data_size: JSON.stringify(response.data).length,
-        entries_count: response.data?.entries?.length || 0
+        entries_count: response.data?.entries?.length || 0,
+        response_success: !!response.data
       });
+      
+      // Ensure we return a standard format even if the response is unexpected
+      if (!response.data) {
+        return { entries: [], status: 'empty_response' };
+      }
+      
+      if (!response.data.entries && response.data.results) {
+        // Handle different response format
+        return { 
+          entries: response.data.results,
+          status: 'success',
+          original_response: 'converted_from_results'
+        };
+      }
       
       return response.data;
     } catch (error) {
@@ -210,7 +262,12 @@ class BOEProcessor extends BaseProcessor {
         }
       });
       
-      throw new Error(`BOE analysis failed: ${error.message}`);
+      // Return empty results instead of throwing
+      return { 
+        entries: [],
+        status: 'error',
+        error: error.message
+      };
     }
   }
 }

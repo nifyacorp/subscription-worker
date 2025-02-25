@@ -7,298 +7,222 @@ const SUBSCRIPTION_STATES = {
   PROCESSING: 'processing' // Processor confirmed receipt, now processing
 };
 
-async function processSubscriptionAsync(subscription, subscriptionProcessor) {
-  const logger = getLogger("subscription-process");
-  let client = null;
+/**
+ * Process a subscription asynchronously
+ */
+async function processSubscriptionAsync(subscription, { pool, boeController }) {
+  const logger = getLogger('subscription-process-async');
   
+  // Log detailed information about what we received
+  logger.debug('Processing subscription asynchronously', {
+    subscription_id: subscription?.subscription_id || 'unknown',
+    subscription_data: subscription ? JSON.stringify(subscription).substring(0, 200) + '...' : 'null',
+    boe_controller_available: !!boeController,
+    controller_type: boeController ? boeController.constructor.name : 'undefined',
+    has_process_method: boeController && typeof boeController.processSubscription === 'function'
+  });
+  
+  // Validate inputs
+  if (!subscription) {
+    logger.error('No subscription data provided');
+    throw new Error('No subscription data provided');
+  }
+  
+  if (!boeController || typeof boeController.processSubscription !== 'function') {
+    logger.error('No valid processor provided', {
+      subscription_id: subscription.subscription_id,
+      controller_type: boeController ? boeController.constructor.name : 'null',
+      controller_methods: boeController ? Object.getOwnPropertyNames(Object.getPrototypeOf(boeController)) : []
+    });
+    throw new Error('No valid processor provided');
+  }
+  
+  const { subscription_id, processing_id } = subscription;
+  
+  if (!subscription_id) {
+    logger.error('No subscription ID in data');
+    throw new Error('No subscription ID in data');
+  }
+  
+  // Start a client transaction for database operations
+  let client;
   try {
-    // Log subscription data for debugging
-    logger.debug("Starting subscription processing", {
-      subscription_id: subscription.subscription_id,
-      subscription_data: JSON.stringify(subscription),
-      processor_type: subscriptionProcessor ? typeof subscriptionProcessor : 'undefined',
-      processor_methods: subscriptionProcessor ? Object.getOwnPropertyNames(Object.getPrototypeOf(subscriptionProcessor)) : []
-    });
-
-    if (!subscription) {
-      logger.error("No subscription data provided");
-      throw new Error("No subscription data provided");
-    }
-
-    if (!subscriptionProcessor) {
-      logger.error("No processor available for subscription", { 
-        subscription_id: subscription.subscription_id,
-        subscription_type: subscription.metadata?.type || 'unknown'
-      });
-      throw new Error(`No processor available for subscription ${subscription.subscription_id}`);
-    }
+    client = await pool.connect();
     
-    logger.debug("Connecting to database");
-    client = await subscriptionProcessor.pool.connect();
-    logger.debug("Database connection established");
+    // Begin transaction
+    await client.query('BEGIN');
     
-    // Get full subscription data
-    logger.debug("Querying subscription details", { 
-      subscription_id: subscription.subscription_id,
-      query: "SELECT subscription details" 
-    });
-    
-    const result = await client.query(
-      `SELECT 
-        p.id as processing_id,
-        p.subscription_id,
-        p.created_at,
-        p.updated_at,
-        p.status,
-        p.result,
-        p.metadata,
-        s.created_at as subscription_created_at,
-        s.updated_at as subscription_updated_at,
-        s.user_id,
-        s.type_id,
-        s.prompts,
-        s.frequency,
-        s.last_check_at
-      FROM subscription_processings p
-      JOIN subscriptions s ON p.subscription_id = s.id
-      WHERE p.subscription_id = $1
-      ORDER BY p.created_at DESC
-      LIMIT 1`,
-      [subscription.subscription_id]
+    // Get the subscription details to ensure it exists and is valid
+    const subscriptionResult = await client.query(
+      `SELECT * FROM subscriptions WHERE id = $1`,
+      [subscription_id]
     );
     
-    logger.debug("Query result received", { 
-      subscription_id: subscription.subscription_id,
-      rows_found: result.rowCount
-    });
-    
-    if (result.rowCount === 0) {
-      throw new Error(`No subscription found with id ${subscription.subscription_id}`);
+    if (subscriptionResult.rowCount === 0) {
+      throw new Error(`Subscription not found with ID: ${subscription_id}`);
     }
     
-    const subscriptionData = result.rows[0];
-    logger.debug("Subscription details retrieved", { subscription: subscriptionData });
+    const subscriptionData = subscriptionResult.rows[0];
+    logger.debug('Retrieved subscription data', {
+      subscription_id,
+      user_id: subscriptionData.user_id,
+      is_active: subscriptionData.is_active
+    });
     
-    // Begin transaction for updating status
-    await client.query("BEGIN");
-    
-    // Validate subscription status before updating
-    // First check if there's any active processing for this subscription
-    const activeProcessingCheck = await client.query(
-      `SELECT status FROM subscription_processings 
-       WHERE subscription_id = $1 AND status IN ('pending', 'processing', 'sending')
-       AND id != $2
+    // Check if there's already an active processing
+    const activeProcessingResult = await client.query(
+      `SELECT id, status FROM subscription_processings
+       WHERE subscription_id = $1 AND status IN ('sending', 'processing')
+       ORDER BY created_at DESC
        LIMIT 1`,
-      [subscription.subscription_id, subscriptionData.processing_id]
+      [subscription_id]
     );
     
-    if (activeProcessingCheck.rowCount > 0) {
-      logger.warn("Another processing is already active for this subscription", {
-        subscription_id: subscription.subscription_id,
-        current_processing_id: subscriptionData.processing_id,
-        existing_status: activeProcessingCheck.rows[0].status
+    if (activeProcessingResult.rowCount > 0 && processing_id !== activeProcessingResult.rows[0].id) {
+      const activeProcessing = activeProcessingResult.rows[0];
+      logger.warn('Another processing is already active for this subscription', {
+        subscription_id,
+        active_processing_id: activeProcessing.id,
+        active_status: activeProcessing.status,
+        current_processing_id: processing_id
       });
-      
-      // Still proceed, but with a warning
     }
     
-    // Update status to SENDING
-    logger.debug("Updating subscription processing status to SENDING", {
-      processing_id: subscriptionData.processing_id,
-      status: "sending"
+    // Update the processing status to SENDING
+    logger.debug('Updating processing status to SENDING', {
+      subscription_id,
+      processing_id
     });
     
     try {
-      await client.query(
-        `UPDATE subscription_processings 
-         SET status = 'sending', updated_at = NOW()
-         WHERE id = $1 AND status = 'pending'`,
-        [subscriptionData.processing_id]
+      const updateResult = await client.query(
+        `UPDATE subscription_processings
+         SET status = $1, updated_at = NOW()
+         WHERE id = $2
+         RETURNING id, status`,
+        [SUBSCRIPTION_STATES.SENDING, processing_id]
       );
       
-      // Verify the update was successful
-      const statusUpdateCheck = await client.query(
-        `SELECT status FROM subscription_processings WHERE id = $1`,
-        [subscriptionData.processing_id]
-      );
+      if (updateResult.rowCount === 0) {
+        throw new Error(`Processing record not found with ID: ${processing_id}`);
+      }
       
-      if (statusUpdateCheck.rowCount === 0 || statusUpdateCheck.rows[0].status !== 'sending') {
-        logger.warn("Status update did not complete as expected", {
-          processing_id: subscriptionData.processing_id,
-          expected_status: 'sending',
-          actual_status: statusUpdateCheck.rowCount > 0 ? statusUpdateCheck.rows[0].status : 'unknown'
-        });
-      } else {
-        logger.debug("Status updated successfully", {
-          processing_id: subscriptionData.processing_id,
-          status: 'sending'
+      const updatedProcessing = updateResult.rows[0];
+      if (updatedProcessing.status !== SUBSCRIPTION_STATES.SENDING) {
+        logger.warn('Processing status not updated as expected', {
+          subscription_id,
+          processing_id,
+          expected_status: SUBSCRIPTION_STATES.SENDING,
+          actual_status: updatedProcessing.status
         });
       }
     } catch (updateError) {
-      logger.error("Error updating subscription status", {
-        processing_id: subscriptionData.processing_id,
-        phase: "update_status",
-        error: updateError,
-        error_message: updateError.message,
-        error_code: updateError.code
-      });
-      
-      // If this is a constraint violation, attempt an alternative approach
-      if (updateError.code === '23514') {
-        logger.warn("Constraint violation detected. Attempting alternative update approach", {
-          processing_id: subscriptionData.processing_id
+      // Handle constraint violation errors separately
+      if (updateError.code === '23514') { // Check constraint violation
+        logger.warn('Constraint violation when updating processing status', {
+          subscription_id,
+          processing_id,
+          error_code: updateError.code,
+          error_message: updateError.message
         });
         
-        // Create a new processing record instead of updating the existing one
-        await client.query(
+        // Create a new processing record instead
+        logger.info('Creating new processing record due to constraint violation', {
+          subscription_id
+        });
+        
+        const insertResult = await client.query(
           `INSERT INTO subscription_processings
            (subscription_id, status, metadata)
-           VALUES ($1, 'sending', $2)`,
-          [subscription.subscription_id, JSON.stringify(subscriptionData.metadata)]
+           VALUES ($1, $2, $3)
+           RETURNING id, status`,
+          [
+            subscription_id,
+            SUBSCRIPTION_STATES.SENDING,
+            JSON.stringify(subscriptionData.metadata || {})
+          ]
         );
         
-        const newProcessingResult = await client.query(
-          `SELECT id FROM subscription_processings 
-           WHERE subscription_id = $1 
-           ORDER BY created_at DESC LIMIT 1`,
-          [subscription.subscription_id]
-        );
-        
-        if (newProcessingResult.rowCount > 0) {
-          subscriptionData.processing_id = newProcessingResult.rows[0].id;
-          logger.info("Created new processing record instead of updating", {
-            subscription_id: subscription.subscription_id,
-            new_processing_id: subscriptionData.processing_id
-          });
-        } else {
-          throw new Error("Failed to create alternative processing record");
+        if (insertResult.rowCount === 0) {
+          throw new Error('Failed to create new processing record');
         }
+        
+        const newProcessing = insertResult.rows[0];
+        logger.info('Created new processing record', {
+          subscription_id,
+          new_processing_id: newProcessing.id,
+          status: newProcessing.status
+        });
       } else {
-        // For other errors, rethrow
+        // Re-throw other errors
         throw updateError;
       }
     }
     
-    await client.query("COMMIT");
+    // Commit the transaction
+    await client.query('COMMIT');
     
-    // Determine the processor type from metadata
-    const processorType = subscriptionData.metadata?.type || "unknown";
-    logger.debug(`Using ${processorType} processor for subscription`, {
-      subscription_id: subscription.subscription_id,
-      processor_type: processorType,
-      processor_available: !!subscriptionProcessor
+    // Prepare the data for the processor
+    const processorData = {
+      subscription_id,
+      user_id: subscriptionData.user_id,
+      metadata: subscriptionData.metadata,
+      prompts: subscriptionData.prompts
+    };
+    
+    // Log what we're sending to the processor
+    logger.debug('Sending data to processor', {
+      subscription_id,
+      data_preview: JSON.stringify(processorData).substring(0, 200) + '...',
+      processor_type: boeController.constructor.name
     });
     
-    // Process subscription with the appropriate processor
+    // Process the subscription with the BOE controller
     try {
-      // Check if processor has the processSubscription method
-      if (!subscriptionProcessor.processSubscription) {
-        logger.warn(`Processor doesn't have processSubscription method`, {
-          processor_type: processorType,
-          processor_methods: Object.getOwnPropertyNames(Object.getPrototypeOf(subscriptionProcessor))
-        });
-        throw new Error(`Processor ${processorType} doesn't have processSubscription method`);
-      }
+      const result = await boeController.processSubscription(processorData);
       
-      // Call the processor's processSubscription method
-      logger.debug("Calling processor processSubscription method", {
-        subscription_id: subscription.subscription_id,
-        processor_type: processorType,
-        prompts: subscriptionData.prompts
+      logger.info('Processor completed successfully', {
+        subscription_id,
+        result_status: result?.status || 'unknown',
+        entries_count: result?.entries?.length || 0,
+        matches_count: result?.matches?.length || 0,
+        result_summary: JSON.stringify(result).substring(0, 200) + '...'
       });
       
-      const processingResult = await subscriptionProcessor.processSubscription(subscriptionData);
+      // Update the processing status to COMPLETED
+      await updateProcessingStatus(pool, processing_id, SUBSCRIPTION_STATES.PROCESSING, result);
       
-      // Re-connect to database for updates
-      if (!client || client.release) {
-        logger.debug("Reconnecting to database for status update");
-        client = await subscriptionProcessor.pool.connect();
-      }
-      
-      // Update processing status to completed
-      await client.query("BEGIN");
-      logger.debug("Updating processing status to completed", {
-        processing_id: subscriptionData.processing_id,
-        result_summary: processingResult ? "success" : "no result"
+      return result;
+    } catch (processorError) {
+      logger.error('Error in processor', {
+        subscription_id,
+        error: processorError.message,
+        stack: processorError.stack
       });
       
-      await client.query(
-        `UPDATE subscription_processings
-         SET status = 'completed', result = $1, updated_at = NOW()
-         WHERE id = $2`,
-        [JSON.stringify(processingResult || {}), subscriptionData.processing_id]
+      // Update the processing status to ERROR
+      await updateProcessingStatus(
+        pool,
+        processing_id,
+        SUBSCRIPTION_STATES.PROCESSING,
+        { error: processorError.message }
       );
       
-      // Update the subscription's last_check_at
-      await client.query(
-        `UPDATE subscriptions
-         SET last_check_at = NOW()
-         WHERE id = $1`,
-        [subscription.subscription_id]
-      );
-      
-      await client.query("COMMIT");
-      logger.debug("Processing completed successfully", {
-        subscription_id: subscription.subscription_id
-      });
-      
-      return {
-        status: "success",
-        message: "Subscription processed successfully",
-        result: processingResult
-      };
-    } catch (processingError) {
-      logger.error("Error during subscription processing", {
-        subscription_id: subscription.subscription_id,
-        processing_id: subscriptionData.processing_id,
-        error: processingError,
-        phase: "processing"
-      });
-      
-      // Re-connect to database for updates if needed
-      if (!client || client.release) {
-        client = await subscriptionProcessor.pool.connect();
-      }
-      
-      // Update processing status to error
-      await client.query("BEGIN");
-      logger.debug("Updating processing status to error", {
-        processing_id: subscriptionData.processing_id,
-        error_message: processingError.message
-      });
-      
-      await client.query(
-        `UPDATE subscription_processings
-         SET status = 'error', 
-             result = $1, 
-             updated_at = NOW()
-         WHERE id = $2`,
-        [
-          JSON.stringify({
-            error: processingError.message,
-            stack: processingError.stack,
-            timestamp: new Date().toISOString()
-          }),
-          subscriptionData.processing_id
-        ]
-      );
-      
-      await client.query("COMMIT");
-      throw processingError;
+      throw processorError;
     }
   } catch (error) {
-    logger.error("Error in subscription processing", {
+    logger.error('Error in processSubscriptionAsync', {
+      subscription_id: subscription?.subscription_id,
       error: error.message,
-      stack: error.stack,
-      subscription_id: subscription?.subscription_id || "unknown"
+      stack: error.stack
     });
     
+    // If we have a client and transaction is in progress, roll it back
     if (client) {
-      // Rollback any pending transaction
       try {
-        await client.query("ROLLBACK");
+        await client.query('ROLLBACK');
       } catch (rollbackError) {
-        logger.error("Error during transaction rollback", {
+        logger.error('Error rolling back transaction', {
           error: rollbackError.message
         });
       }
@@ -306,10 +230,15 @@ async function processSubscriptionAsync(subscription, subscriptionProcessor) {
     
     throw error;
   } finally {
-    // Release database client
+    // Release the client back to the pool
     if (client) {
-      logger.debug("Releasing database client");
-      client.release();
+      try {
+        client.release();
+      } catch (releaseError) {
+        logger.error('Error releasing client', {
+          error: releaseError.message
+        });
+      }
     }
   }
 }
@@ -490,6 +419,67 @@ function createProcessRouter(subscriptionProcessor) {
       return res.status(500).json({
         error: 'Error processing subscriptions',
         message: error.message
+      });
+    }
+  });
+
+  /**
+   * Process a subscription - API handler
+   */
+  router.post('/:id', async (req, res) => {
+    const { id } = req.params;
+    const logger = getLogger('subscription-process-endpoint');
+    
+    logger.info('Received subscription processing request', {
+      subscription_id: id,
+      request_body_size: req.body ? JSON.stringify(req.body).length : 0,
+      content_type: req.get('Content-Type'),
+      content_length: req.get('Content-Length')
+    });
+    
+    // Log the request body for debugging
+    if (req.body) {
+      logger.debug('Request body', {
+        body: JSON.stringify(req.body),
+        body_keys: Object.keys(req.body),
+        empty_body: Object.keys(req.body).length === 0
+      });
+    } else {
+      logger.warn('Request body is empty', {
+        subscription_id: id,
+        content_type: req.get('Content-Type')
+      });
+    }
+    
+    // Validate the subscription ID
+    if (!id || id === 'undefined') {
+      logger.error('Invalid subscription ID', { id });
+      return res.status(400).json({
+        error: 'Invalid subscription ID',
+        status: 'error'
+      });
+    }
+    
+    try {
+      // Process the subscription
+      const result = await subscriptionProcessor.processSubscription(id);
+      
+      logger.info('Subscription processing initiated successfully', {
+        subscription_id: id,
+        result: JSON.stringify(result)
+      });
+      
+      return res.json(result);
+    } catch (error) {
+      logger.error('Error processing subscription', {
+        subscription_id: id,
+        error: error.message,
+        stack: error.stack
+      });
+      
+      return res.status(500).json({
+        error: error.message,
+        status: 'error'
       });
     }
   });
