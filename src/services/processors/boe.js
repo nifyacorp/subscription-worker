@@ -1,6 +1,6 @@
 const axios = require('axios');
 const BaseProcessor = require('./base');
-const { getLogger } = require('../utils/logger');
+const { getLogger } = require('../../config/logger');
 
 const BOE_PARSER_URL = 'https://boe-parser-415554190254.us-central1.run.app';
 
