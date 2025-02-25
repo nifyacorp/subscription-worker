@@ -1,11 +1,23 @@
 const axios = require('axios');
 const BaseProcessor = require('./base');
+const { getLogger } = require('../utils/logger');
 
 const BOE_PARSER_URL = 'https://boe-parser-415554190254.us-central1.run.app';
 
 class BOEProcessor extends BaseProcessor {
   constructor(config) {
-    super(config);
+    super();
+    this.config = config;
+    this.logger = getLogger('boe-processor');
+    this.apiUrl = config.BOE_API_URL || 'https://boe-parser-biy2ojj42a-uc.a.run.app';
+    this.apiKey = config.BOE_API_KEY || '';
+    
+    // Log initialization
+    this.logger.debug('BOE Processor initialized', { 
+      api_url: this.apiUrl,
+      api_key_present: !!this.apiKey,
+      config_keys: Object.keys(config || {})
+    });
     
     const baseURL = BOE_PARSER_URL;
     this.logger.debug({ baseURL }, 'Initializing BOE processor with service URL');
@@ -70,166 +82,135 @@ class BOEProcessor extends BaseProcessor {
     );
   }
 
-  // Nuevo método para manejar solicitudes de procesamiento de suscripciones
+  /**
+   * Process a subscription request - this is the main entry point
+   * This method handles the processing of a subscription, handling empty requests gracefully
+   * 
+   * @param {Object} subscription - The subscription to process
+   * @returns {Promise<Object>} The processing result
+   */
   async processSubscription(subscription) {
+    // Validate the subscription input
     if (!subscription) {
-      this.logger.error({ error: 'No subscription provided' }, 'Null or undefined subscription object');
+      this.logger.error('Subscription is null or undefined');
       throw new Error('Cannot process null or undefined subscription');
     }
     
-    this.logger.debug({
+    this.logger.debug('Processing BOE subscription', {
       subscription_id: subscription.subscription_id,
-      metadata: subscription.metadata ? JSON.stringify(subscription.metadata) : null,
-      prompts: subscription.prompts,
-      method: 'processSubscription',
-      phase: 'start'
-    }, 'Processing subscription');
+      user_id: subscription.user_id,
+      prompts: Array.isArray(subscription.prompts) ? subscription.prompts : 'not an array',
+      subscription_fields: Object.keys(subscription || {})
+    });
     
-    try {
-      // Si la suscripción no tiene prompts, utilizamos un valor por defecto para evitar errores
-      const prompts = subscription.prompts || ['default_prompt_for_empty_requests'];
-      
-      const result = await this.analyzeContent({
-        prompts: prompts,
-        user_id: subscription.metadata?.user_id,
+    // Extract prompts from the subscription
+    let prompts = [];
+    if (Array.isArray(subscription.prompts) && subscription.prompts.length > 0) {
+      prompts = subscription.prompts;
+    } else if (subscription.metadata && Array.isArray(subscription.metadata.prompts)) {
+      prompts = subscription.metadata.prompts;
+    } else {
+      this.logger.warn('No prompts found in subscription', {
+        subscription_id: subscription.subscription_id,
+        subscription_data: JSON.stringify(subscription).substring(0, 200) + '...'
+      });
+    }
+    
+    // If still no prompts, use a default
+    if (!prompts.length) {
+      this.logger.warn('Using default prompt as none was provided', {
         subscription_id: subscription.subscription_id
       });
+      prompts = ['Información general del BOE'];
+    }
+    
+    try {
+      // Analyze BOE content based on prompts
+      const analysisResult = await this.analyzeContent(prompts);
       
-      this.logger.debug({
+      this.logger.info('BOE analysis completed successfully', {
         subscription_id: subscription.subscription_id,
-        results_length: result?.results?.length || 0,
-        method: 'processSubscription',
-        phase: 'complete'
-      }, 'Subscription processing completed');
+        result_count: analysisResult?.entries?.length || 0
+      });
       
-      return result;
+      return analysisResult;
     } catch (error) {
-      this.logger.error({
-        error,
-        message: error.message,
-        stack: error.stack,
+      this.logger.error('Error processing BOE subscription', {
         subscription_id: subscription.subscription_id,
-        method: 'processSubscription',
-        phase: 'error'
-      }, 'Subscription processing failed');
+        error: error.message,
+        stack: error.stack
+      });
       throw error;
     }
   }
-
+  
+  /**
+   * Analyze BOE content based on provided prompts
+   * @param {Array<string>} prompts - The search prompts
+   * @returns {Promise<Object>} The analysis result
+   */
   async analyzeContent(prompts) {
-    // Handle both array of strings and object with prompts
-    const { prompts: promptsToAnalyze, user_id, subscription_id } = 
-      Array.isArray(prompts) ? { prompts } : prompts;
-
-    let retries = 0;
-    let lastError = null;
-
-    while (retries < this.maxRetries) {
-      try {
-        const texts = Array.isArray(promptsToAnalyze) ? promptsToAnalyze : [promptsToAnalyze];
-        
-        if (!texts.length) {
-          this.logger.warn({
-            subscription_id,
-            user_id,
-            method: 'analyzeContent'
-          }, 'No prompts provided for analysis, using default');
-          texts.push('default_prompt_for_empty_requests');
-        }
-
-        const requestStartTime = Date.now();
-
-        this.logger.debug({ 
-          texts,
-          user_id,
-          subscription_id,
-          attempt: retries + 1,
-          max_retries: this.maxRetries,
-          baseURL: this.client.defaults.baseURL,
-          phase: 'analyze_content_start'
-        }, 'Starting BOE content analysis');
-
-        const requestPayload = {
-          texts,
-          metadata: {
-            user_id,
-            subscription_id
+    if (!prompts || !Array.isArray(prompts) || prompts.length === 0) {
+      this.logger.warn('No prompts provided for BOE analysis, using default');
+      prompts = ['Información general del BOE'];
+    }
+    
+    this.logger.debug('Analyzing BOE content', { prompts });
+    
+    try {
+      const requestBody = {
+        prompts: prompts,
+        limit: 5,
+        date: new Date().toISOString().split('T')[0] // Today's date in YYYY-MM-DD format
+      };
+      
+      this.logger.debug('Sending request to BOE API', {
+        endpoint: `${this.apiUrl}/analyze`,
+        body: JSON.stringify(requestBody),
+        api_key_present: !!this.apiKey,
+        request_data: {
+          url: `${this.apiUrl}/analyze`,
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'x-api-key': this.apiKey ? this.apiKey.substring(0, 3) + '...' : 'not-set'
           }
-        };
-
-        const response = await this.client.post('/analyze-text', requestPayload);
-        
-        if (!response.data || typeof response.data !== 'object') {
-          throw new Error('Invalid response from BOE service: Empty or invalid response data');
         }
-
-        const processingTime = Date.now() - requestStartTime;
-        const result = {
-          query_date: response.data.query_date,
-          results: response.data.results,
-          metadata: {
-            ...response.data.metadata,
-            processing_time_ms: processingTime,
-            retries: retries,
-            request_id: response.headers['x-request-id']
-          }
-        };
-
-        this.validateResponse(result);
-
-        this.logger.info({
-          processingTime,
-          matchesFound: result.results.length,
-          retries,
-          request_id: result.metadata.request_id,
-          phase: 'analyze_content_complete'
-        }, 'BOE analysis completed');
-
-        return result;
-      } catch (error) {
-        lastError = error;
-        retries++;
-
-        if (retries < this.maxRetries) {
-          this.logger.warn({
-            error: error.message,
-            attempt: retries,
-            max_retries: this.maxRetries,
-            next_retry_in_ms: this.retryDelay
-          }, 'Request failed, retrying...');
-
-          await new Promise(resolve => setTimeout(resolve, this.retryDelay));
-          continue;
-        }
-
-        // Log full request details on final failure
-        this.logger.error({
-          error: lastError,
-          message: lastError.message,
-          stack: lastError.stack,
-          subscription_id,
-          user_id,
-          texts: Array.isArray(promptsToAnalyze) ? promptsToAnalyze : [promptsToAnalyze],
-          retries,
-          phase: 'analyze_content_failed'
-        }, 'BOE analysis failed after all retries');
-
-        // Rethrow with more context after all retries are exhausted
-        const errorMessage = error.response?.data?.error || error.message;
-        const enhancedError = new Error(`BOE analysis failed: ${errorMessage}`);
-        enhancedError.originalError = error;
-        enhancedError.context = {
-          request: {
-            url: this.client.defaults.baseURL + '/analyze-text',
-            payload: requestPayload
+      });
+      
+      // Make the request to the BOE API
+      const response = await axios.post(
+        `${this.apiUrl}/analyze`, 
+        requestBody,
+        {
+          headers: {
+            'Content-Type': 'application/json',
+            'x-api-key': this.apiKey
           },
-          response: error.response?.data,
-          status: error.response?.status,
-          request_id: error.response?.headers?.['x-request-id'],
-          retries
-        };
-        throw enhancedError;
-      }
+          timeout: 30000 // 30 second timeout
+        }
+      );
+      
+      this.logger.debug('Received response from BOE API', {
+        status: response.status,
+        data_size: JSON.stringify(response.data).length,
+        entries_count: response.data?.entries?.length || 0
+      });
+      
+      return response.data;
+    } catch (error) {
+      this.logger.error('Error analyzing BOE content', {
+        error: error.message,
+        status: error.response?.status,
+        data: error.response?.data ? JSON.stringify(error.response.data).substring(0, 200) : 'No response data',
+        request: {
+          url: error.config?.url,
+          method: error.config?.method,
+          data: error.config?.data ? JSON.stringify(error.config.data).substring(0, 200) : 'No request data'
+        }
+      });
+      
+      throw new Error(`BOE analysis failed: ${error.message}`);
     }
   }
 }

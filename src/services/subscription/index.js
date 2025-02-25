@@ -10,59 +10,189 @@ const logger = getLogger('subscription-processor');
 class SubscriptionProcessor {
   constructor(pool, parserApiKey) {
     this.pool = pool;
-    this.logger = logger;
-    this.processors = new Map();
+    this.parserApiKey = parserApiKey;
+    this.logger = getLogger('subscription-processor');
     
-    // Initialize services
-    this.dbService = new DatabaseService(pool);
-    this.notificationService = new NotificationService(pool);
-    this.processingService = new ProcessingService();
-    
-    // Initialize processors with configuration
-    for (const type of processorRegistry.getRegisteredTypes()) {
-      this.processors.set(type, processorRegistry.createProcessor(type, { apiKey: parserApiKey }));
+    // Explicitly initialize the BOE controller
+    try {
+      const BOEProcessor = require('../processors/boe');
+      this.boeController = new BOEProcessor({
+        BOE_API_KEY: this.parserApiKey,
+        BOE_API_URL: process.env.BOE_API_URL || 'https://boe-parser-415554190254.us-central1.run.app'
+      });
+      
+      this.logger.info('BOE Controller initialized successfully', {
+        controller_type: typeof this.boeController,
+        has_process_method: typeof this.boeController.processSubscription === 'function'
+      });
+    } catch (error) {
+      this.logger.error('Failed to initialize BOE controller', {
+        error: error.message,
+        stack: error.stack
+      });
+      // We don't throw here to allow other functionalities to work
     }
     
-    // Initialize the BOE controller explicitly for direct access
-    this.boeController = new BOEProcessor({ apiKey: parserApiKey });
-    this.logger.debug('BOE controller initialized for direct access');
+    // Map subscription types to their processors
+    this.processorMap = {
+      'boe': this.boeController,
+      // Add other processors as needed
+    };
     
-    // Add processSubscription method to boeController if it doesn't exist
-    if (!this.boeController.processSubscription) {
-      this.boeController.processSubscription = async function(subscription) {
-        this.logger.debug({
-          subscription_id: subscription.subscription_id,
-          prompts: subscription.prompts,
-          metadata: subscription.metadata,
-          method: 'processSubscription'
-        }, 'BOE controller processing subscription directly');
+    this.logger.debug('SubscriptionProcessor initialized', {
+      pool_connected: !!pool,
+      api_key_present: !!parserApiKey,
+      processors_available: Object.keys(this.processorMap)
+    });
+  }
+  
+  /**
+   * Process a single subscription by ID
+   * @param {string} subscriptionId - The ID of the subscription to process
+   * @returns {Promise<object>} Processing result
+   */
+  async processSubscription(subscriptionId) {
+    const logger = getLogger('subscription-processor');
+    logger.debug('Processing subscription by ID', { subscription_id: subscriptionId });
+    
+    if (!subscriptionId) {
+      logger.error('No subscription ID provided');
+      throw new Error('Subscription ID is required');
+    }
+    
+    try {
+      // First, get the subscription details from the database
+      const client = await this.pool.connect();
+      
+      try {
+        const result = await client.query(
+          `SELECT 
+            s.id as subscription_id, 
+            s.user_id, 
+            s.type_id, 
+            s.prompts, 
+            s.frequency,
+            s.active,
+            s.last_check_at,
+            s.metadata,
+            st.slug as type_slug
+          FROM subscriptions s
+          JOIN subscription_types st ON s.type_id = st.id
+          WHERE s.id = $1`,
+          [subscriptionId]
+        );
         
-        try {
-          const result = await this.analyzeContent({
-            prompts: subscription.prompts,
-            user_id: subscription.metadata?.user_id,
-            subscription_id: subscription.subscription_id
+        if (result.rowCount === 0) {
+          logger.error('Subscription not found', { subscription_id: subscriptionId });
+          throw new Error(`Subscription with ID ${subscriptionId} not found`);
+        }
+        
+        const subscription = result.rows[0];
+        
+        // Check if subscription is active
+        if (!subscription.active) {
+          logger.warn('Attempting to process inactive subscription', { subscription_id: subscriptionId });
+          return { status: 'skipped', message: 'Subscription is inactive' };
+        }
+        
+        // Create a processing record for this run
+        const processingInsert = await client.query(
+          `INSERT INTO subscription_processings
+           (subscription_id, status, metadata)
+           VALUES ($1, 'pending', $2)
+           RETURNING id`,
+          [subscriptionId, JSON.stringify(subscription.metadata || {})]
+        );
+        
+        const processingId = processingInsert.rows[0].id;
+        
+        logger.debug('Created processing record', {
+          subscription_id: subscriptionId,
+          processing_id: processingId
+        });
+        
+        // Prepare subscription data with all necessary information
+        const subscriptionData = {
+          subscription_id: subscription.subscription_id,
+          processing_id: processingId,
+          user_id: subscription.user_id,
+          type_id: subscription.type_id,
+          type_slug: subscription.type_slug,
+          prompts: subscription.prompts,
+          frequency: subscription.frequency,
+          metadata: subscription.metadata || {}
+        };
+        
+        // Determine which processor to use
+        let processor = null;
+        if (subscription.type_slug === 'boe') {
+          processor = this.boeController;
+        } else {
+          // Try to find a processor based on the type_id
+          processor = this.processorMap[subscription.type_id] || this.processorMap[subscription.type_slug];
+        }
+        
+        if (!processor) {
+          logger.error('No processor available for subscription type', {
+            subscription_id: subscriptionId,
+            type_id: subscription.type_id,
+            type_slug: subscription.type_slug
           });
           
-          this.logger.debug({
-            subscription_id: subscription.subscription_id,
-            results_length: result?.results?.length || 0,
-            method: 'processSubscription'
-          }, 'BOE controller direct processing completed');
+          // Update processing record to error
+          await client.query(
+            `UPDATE subscription_processings
+             SET status = 'error', result = $1, updated_at = NOW()
+             WHERE id = $2`,
+            [
+              JSON.stringify({
+                error: 'No processor available for this subscription type',
+                timestamp: new Date().toISOString()
+              }),
+              processingId
+            ]
+          );
           
-          return result;
-        } catch (error) {
-          this.logger.error({
-            error,
-            message: error.message,
-            stack: error.stack,
-            subscription_id: subscription.subscription_id,
-            method: 'processSubscription'
-          }, 'BOE controller direct processing failed');
-          throw error;
+          throw new Error(`No processor available for subscription type ${subscription.type_slug || subscription.type_id}`);
         }
-      };
-      this.logger.debug('Added processSubscription method to BOE controller');
+        
+        logger.debug('Delegating to process subscription async', {
+          subscription_id: subscriptionId,
+          processor_type: processor.constructor.name || typeof processor
+        });
+        
+        // Process the subscription asynchronously
+        const processPromise = processSubscriptionAsync(subscriptionData, {
+          pool: this.pool,
+          boeController: processor
+        });
+        
+        // We don't await this promise - it will run in the background
+        processPromise.catch(error => {
+          logger.error('Unhandled error in async processing', {
+            subscription_id: subscriptionId,
+            error: error.message,
+            stack: error.stack
+          });
+        });
+        
+        return {
+          status: 'accepted',
+          message: 'Subscription processing started',
+          processing_id: processingId
+        };
+        
+      } finally {
+        client.release();
+        logger.debug('Database client released');
+      }
+    } catch (error) {
+      logger.error('Error processing subscription', {
+        subscription_id: subscriptionId,
+        error: error.message,
+        stack: error.stack
+      });
+      throw error;
     }
   }
 
