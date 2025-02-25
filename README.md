@@ -2,7 +2,7 @@
 
 A Node.js microservice that processes BOE (Boletín Oficial del Estado) subscriptions using Cloud Run and Cloud SQL.
 
-## Repository Structure
+## Repository Structure.
 
 ```
 .
