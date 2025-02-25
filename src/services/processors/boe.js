@@ -7,19 +7,29 @@ const BOE_PARSER_URL = 'https://boe-parser-415554190254.us-central1.run.app';
 class BOEProcessor extends BaseProcessor {
   constructor(config) {
     super();
-    this.config = config;
+    this.config = config || {};
     this.logger = getLogger('boe-processor');
-    this.apiUrl = config.BOE_API_URL || 'https://boe-parser-biy2ojj42a-uc.a.run.app';
-    this.apiKey = config.BOE_API_KEY || '';
     
-    // Log initialization
-    this.logger.debug('BOE Processor initialized', { 
-      api_url: this.apiUrl,
-      api_key_present: !!this.apiKey,
-      config_keys: Object.keys(config || {})
+    this.logger.debug('BOE Processor constructor called', {
+      has_config: !!config,
+      config_type: typeof config,
+      config_keys: config ? Object.keys(config) : []
     });
     
-    const baseURL = BOE_PARSER_URL;
+    this.apiUrl = config?.BOE_API_URL || BOE_PARSER_URL;
+    this.apiKey = config?.BOE_API_KEY || '';
+    
+    // Log initialization with complete information
+    this.logger.debug('BOE Processor configuration', { 
+      api_url: this.apiUrl,
+      api_key_present: !!this.apiKey,
+      api_key_length: this.apiKey ? this.apiKey.length : 0,
+      environment_api_url: process.env.BOE_API_URL,
+      config_api_url: config?.BOE_API_URL,
+      fallback_url: BOE_PARSER_URL
+    });
+    
+    const baseURL = this.apiUrl; // Use the properly initialized apiUrl
     this.logger.debug({ baseURL }, 'Initializing BOE processor with service URL');
     
     this.client = axios.create({
@@ -27,7 +37,7 @@ class BOEProcessor extends BaseProcessor {
       timeout: 120000, // 2 minute timeout
       headers: {
         'Content-Type': 'application/json',
-        ...(config.apiKey && { 'Authorization': `Bearer ${config.apiKey}` })
+        ...(config.BOE_API_KEY && { 'x-api-key': config.BOE_API_KEY })
       }
     });
 
@@ -96,9 +106,13 @@ class BOEProcessor extends BaseProcessor {
       throw new Error('Cannot process null or undefined subscription');
     }
     
+    // Extract user ID and subscription ID
+    const subscription_id = subscription.subscription_id || subscription.id;
+    const user_id = subscription.user_id;
+    
     this.logger.debug('Processing BOE subscription', {
-      subscription_id: subscription.subscription_id || 'unknown',
-      user_id: subscription.user_id || 'unknown',
+      subscription_id: subscription_id || 'unknown',
+      user_id: user_id || 'unknown',
       subscription_type: typeof subscription,
       subscription_fields: Object.keys(subscription || {})
     });
@@ -141,7 +155,7 @@ class BOEProcessor extends BaseProcessor {
     if (!prompts.length) {
       const defaultPrompt = 'Información general del BOE';
       this.logger.warn('Using default prompt as none was provided', {
-        subscription_id: subscription.subscription_id || 'unknown',
+        subscription_id: subscription_id || 'unknown',
         default_prompt: defaultPrompt
       });
       prompts = [defaultPrompt];
@@ -151,13 +165,15 @@ class BOEProcessor extends BaseProcessor {
       // Analyze BOE content based on prompts
       this.logger.info('Sending prompts to BOE analyzer', {
         prompt_count: prompts.length,
-        first_prompt: prompts[0]
+        first_prompt: prompts[0],
+        subscription_id,
+        user_id
       });
       
-      const analysisResult = await this.analyzeContent(prompts);
+      const analysisResult = await this.analyzeContent(prompts, subscription_id, user_id);
       
       this.logger.info('BOE analysis completed successfully', {
-        subscription_id: subscription.subscription_id || 'unknown',
+        subscription_id: subscription_id || 'unknown',
         result_count: analysisResult?.entries?.length || 0,
         status: analysisResult?.status || 'unknown'
       });
@@ -165,13 +181,13 @@ class BOEProcessor extends BaseProcessor {
       return {
         status: 'success',
         timestamp: new Date().toISOString(),
-        subscription_id: subscription.subscription_id || 'unknown',
+        subscription_id: subscription_id || 'unknown',
         entries: analysisResult?.entries || [],
         matches: analysisResult?.entries || []
       };
     } catch (error) {
       this.logger.error('Error processing BOE subscription', {
-        subscription_id: subscription.subscription_id || 'unknown',
+        subscription_id: subscription_id || 'unknown',
         error: error.message,
         stack: error.stack
       });
@@ -180,7 +196,7 @@ class BOEProcessor extends BaseProcessor {
       return {
         status: 'error',
         timestamp: new Date().toISOString(),
-        subscription_id: subscription.subscription_id || 'unknown',
+        subscription_id: subscription_id || 'unknown',
         error: error.message,
         entries: [],
         matches: []
@@ -191,47 +207,47 @@ class BOEProcessor extends BaseProcessor {
   /**
    * Analyze BOE content based on provided prompts
    * @param {Array<string>} prompts - The search prompts
+   * @param {string} subscriptionId - The subscription ID
+   * @param {string} userId - The user ID
    * @returns {Promise<Object>} The analysis result
    */
-  async analyzeContent(prompts) {
+  async analyzeContent(prompts, subscriptionId, userId) {
     if (!prompts || !Array.isArray(prompts) || prompts.length === 0) {
       this.logger.warn('No prompts provided for BOE analysis, using default');
       prompts = ['Información general del BOE'];
     }
     
-    this.logger.debug('Analyzing BOE content', { prompts });
+    this.logger.debug('Analyzing BOE content', { 
+      prompts,
+      subscriptionId,
+      userId 
+    });
     
     try {
       const requestBody = {
-        prompts: prompts,
+        texts: prompts,
+        metadata: {
+          user_id: userId || 'system-user',
+          subscription_id: subscriptionId || 'system-subscription',
+        },
         limit: 5,
-        date: new Date().toISOString().split('T')[0] // Today's date in YYYY-MM-DD format
+        date: new Date().toISOString().split('T')[0]
       };
       
       this.logger.debug('Sending request to BOE API', {
-        endpoint: `${this.apiUrl}/analyze`,
+        endpoint: '/analyze-text',
         body_preview: JSON.stringify(requestBody).substring(0, 200),
         api_key_present: !!this.apiKey,
-        api_url: this.apiUrl
+        api_url: this.apiUrl,
+        client_configured: !!this.client
       });
       
-      // Make the request to the BOE API
-      const response = await axios.post(
-        `${this.apiUrl}/analyze`, 
-        requestBody,
-        {
-          headers: {
-            'Content-Type': 'application/json',
-            'x-api-key': this.apiKey
-          },
-          timeout: 30000 // 30 second timeout
-        }
-      );
+      const response = await this.client.post('/analyze-text', requestBody);
       
       this.logger.debug('Received response from BOE API', {
         status: response.status,
         data_size: JSON.stringify(response.data).length,
-        entries_count: response.data?.entries?.length || 0,
+        results_count: response.data?.results?.length || 0,
         response_success: !!response.data
       });
       
@@ -240,12 +256,28 @@ class BOEProcessor extends BaseProcessor {
         return { entries: [], status: 'empty_response' };
       }
       
-      if (!response.data.entries && response.data.results) {
-        // Handle different response format
+      // Transform the response format to match what the subscription processor expects
+      if (response.data.results) {
+        // Extract all matches from all results
+        const entries = [];
+        
+        // Each result corresponds to one prompt
+        response.data.results.forEach(result => {
+          if (result.matches && Array.isArray(result.matches)) {
+            // Add the prompt to each match for tracking
+            const matchesWithPrompt = result.matches.map(match => ({
+              ...match,
+              prompt: result.prompt
+            }));
+            entries.push(...matchesWithPrompt);
+          }
+        });
+        
         return { 
-          entries: response.data.results,
+          entries,
           status: 'success',
-          original_response: 'converted_from_results'
+          query_date: response.data.query_date,
+          boe_info: response.data.boe_info
         };
       }
       
@@ -262,7 +294,6 @@ class BOEProcessor extends BaseProcessor {
         }
       });
       
-      // Return empty results instead of throwing
       return { 
         entries: [],
         status: 'error',
