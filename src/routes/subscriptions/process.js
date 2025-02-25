@@ -252,18 +252,20 @@ function createProcessRouter(subscriptionProcessor) {
     logger.debug('Process subscription request received', { 
       subscription_id: id,
       body: req.body,
-      body_json: JSON.stringify(req.body),
+      body_size: req.body ? JSON.stringify(req.body).length : 0,
       body_type: typeof req.body,
       body_length: req.body ? Object.keys(req.body).length : 0,
       headers: req.headers,
+      content_type: req.headers['content-type'],
+      content_length: req.headers['content-length'],
       method: req.method,
       path: req.path,
       phase: 'request_received'
     });
 
-    // If the body is empty, add a warning log
+    // If the body is empty, add a warning log but continue processing
     if (!req.body || Object.keys(req.body).length === 0) {
-      logger.warn('Request body is empty, this might cause problems with some processors', {
+      logger.warn('Request body is empty, using only subscription ID from URL parameters', {
         subscription_id: id,
         body_empty: true,
         headers: req.headers,
@@ -271,7 +273,15 @@ function createProcessRouter(subscriptionProcessor) {
         content_length: req.headers['content-length'],
         phase: 'empty_request_body'
       });
-      // No issue, we'll use the subscription ID from params
+    }
+    
+    // Validate the subscription ID
+    if (!id || id === 'undefined' || id === 'null') {
+      logger.error('Invalid subscription ID', { subscription_id: id });
+      return res.status(400).json({
+        error: 'Invalid subscription ID',
+        message: 'A valid subscription ID is required'
+      });
     }
     
     try {
@@ -296,11 +306,23 @@ function createProcessRouter(subscriptionProcessor) {
         });
       }
       
-      // Process the subscription
+      // Process the subscription using only the ID - the processor will fetch the subscription details
       logger.info('Processing subscription', { subscription_id: id });
-      
-      // We check first if the subscription is valid and initiate processing
       const result = await subscriptionProcessor.processSubscription(id);
+      
+      // Handle processor error responses
+      if (result && result.status === 'error') {
+        logger.warn('Processor returned error status', {
+          subscription_id: id,
+          error_message: result.error || 'Unknown error'
+        });
+        return res.status(400).json({
+          status: 'error',
+          error: result.error || 'Error processing subscription',
+          message: 'The subscription could not be processed due to an error',
+          subscription_id: id
+        });
+      }
       
       // Return successful response
       logger.info('Subscription queued for processing', { 
@@ -311,7 +333,8 @@ function createProcessRouter(subscriptionProcessor) {
       return res.status(202).json({
         status: 'success',
         message: 'Subscription queued for processing',
-        processing_id: result.processing_id
+        processing_id: result.processing_id || 'unknown',
+        subscription_id: id
       });
     } catch (error) {
       logger.error('Error processing subscription', {
