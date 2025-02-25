@@ -3,6 +3,7 @@ const processorRegistry = require('../processors/registry');
 const DatabaseService = require('./database');
 const NotificationService = require('./notification');
 const ProcessingService = require('./processing');
+const BOEProcessor = require('../processors/boe');
 
 const logger = getLogger('subscription-processor');
 
@@ -21,6 +22,48 @@ class SubscriptionProcessor {
     for (const type of processorRegistry.getRegisteredTypes()) {
       this.processors.set(type, processorRegistry.createProcessor(type, { apiKey: parserApiKey }));
     }
+    
+    // Initialize the BOE controller explicitly for direct access
+    this.boeController = new BOEProcessor({ apiKey: parserApiKey });
+    this.logger.debug('BOE controller initialized for direct access');
+    
+    // Add processSubscription method to boeController if it doesn't exist
+    if (!this.boeController.processSubscription) {
+      this.boeController.processSubscription = async function(subscription) {
+        this.logger.debug({
+          subscription_id: subscription.subscription_id,
+          prompts: subscription.prompts,
+          metadata: subscription.metadata,
+          method: 'processSubscription'
+        }, 'BOE controller processing subscription directly');
+        
+        try {
+          const result = await this.analyzeContent({
+            prompts: subscription.prompts,
+            user_id: subscription.metadata?.user_id,
+            subscription_id: subscription.subscription_id
+          });
+          
+          this.logger.debug({
+            subscription_id: subscription.subscription_id,
+            results_length: result?.results?.length || 0,
+            method: 'processSubscription'
+          }, 'BOE controller direct processing completed');
+          
+          return result;
+        } catch (error) {
+          this.logger.error({
+            error,
+            message: error.message,
+            stack: error.stack,
+            subscription_id: subscription.subscription_id,
+            method: 'processSubscription'
+          }, 'BOE controller direct processing failed');
+          throw error;
+        }
+      };
+      this.logger.debug('Added processSubscription method to BOE controller');
+    }
   }
 
   async processSubscriptions() {
@@ -29,7 +72,9 @@ class SubscriptionProcessor {
       debug_mode: true,
       pool_total: this.pool.totalCount,
       pool_idle: this.pool.idleCount,
-      pool_waiting: this.pool.waitingCount
+      pool_waiting: this.pool.waitingCount,
+      boe_controller_exists: !!this.boeController,
+      boe_processor_exists: !!this.processors.get('boe')
     }, 'Starting batch subscription processing');
     
     const startTime = Date.now();

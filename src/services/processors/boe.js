@@ -29,7 +29,8 @@ class BOEProcessor extends BaseProcessor {
         url: config.url,
         baseURL: config.baseURL,
         headers: config.headers,
-        data: config.data
+        data: config.data,
+        data_json: JSON.stringify(config.data)
       }, 'Outgoing request');
       return config;
     });
@@ -44,7 +45,8 @@ class BOEProcessor extends BaseProcessor {
           data_preview: {
             query_date: response.data?.query_date,
             results_count: response.data?.results?.length
-          }
+          },
+          response_data: response.data ? JSON.stringify(response.data).substring(0, 500) : null
         }, 'Response received');
         return response;
       },
@@ -60,11 +62,58 @@ class BOEProcessor extends BaseProcessor {
               data: error.response.data,
               headers: error.response.headers
             } : undefined
-          }
+          },
+          request_data: error.config ? JSON.stringify(error.config.data) : null
         }, 'Request failed');
         throw error;
       }
     );
+  }
+
+  // Nuevo método para manejar solicitudes de procesamiento de suscripciones
+  async processSubscription(subscription) {
+    if (!subscription) {
+      this.logger.error({ error: 'No subscription provided' }, 'Null or undefined subscription object');
+      throw new Error('Cannot process null or undefined subscription');
+    }
+    
+    this.logger.debug({
+      subscription_id: subscription.subscription_id,
+      metadata: subscription.metadata ? JSON.stringify(subscription.metadata) : null,
+      prompts: subscription.prompts,
+      method: 'processSubscription',
+      phase: 'start'
+    }, 'Processing subscription');
+    
+    try {
+      // Si la suscripción no tiene prompts, utilizamos un valor por defecto para evitar errores
+      const prompts = subscription.prompts || ['default_prompt_for_empty_requests'];
+      
+      const result = await this.analyzeContent({
+        prompts: prompts,
+        user_id: subscription.metadata?.user_id,
+        subscription_id: subscription.subscription_id
+      });
+      
+      this.logger.debug({
+        subscription_id: subscription.subscription_id,
+        results_length: result?.results?.length || 0,
+        method: 'processSubscription',
+        phase: 'complete'
+      }, 'Subscription processing completed');
+      
+      return result;
+    } catch (error) {
+      this.logger.error({
+        error,
+        message: error.message,
+        stack: error.stack,
+        subscription_id: subscription.subscription_id,
+        method: 'processSubscription',
+        phase: 'error'
+      }, 'Subscription processing failed');
+      throw error;
+    }
   }
 
   async analyzeContent(prompts) {
@@ -80,7 +129,12 @@ class BOEProcessor extends BaseProcessor {
         const texts = Array.isArray(promptsToAnalyze) ? promptsToAnalyze : [promptsToAnalyze];
         
         if (!texts.length) {
-          throw new Error('No prompts provided for analysis');
+          this.logger.warn({
+            subscription_id,
+            user_id,
+            method: 'analyzeContent'
+          }, 'No prompts provided for analysis, using default');
+          texts.push('default_prompt_for_empty_requests');
         }
 
         const requestStartTime = Date.now();
@@ -91,7 +145,8 @@ class BOEProcessor extends BaseProcessor {
           subscription_id,
           attempt: retries + 1,
           max_retries: this.maxRetries,
-          baseURL: this.client.defaults.baseURL
+          baseURL: this.client.defaults.baseURL,
+          phase: 'analyze_content_start'
         }, 'Starting BOE content analysis');
 
         const requestPayload = {
@@ -126,7 +181,8 @@ class BOEProcessor extends BaseProcessor {
           processingTime,
           matchesFound: result.results.length,
           retries,
-          request_id: result.metadata.request_id
+          request_id: result.metadata.request_id,
+          phase: 'analyze_content_complete'
         }, 'BOE analysis completed');
 
         return result;
@@ -146,6 +202,18 @@ class BOEProcessor extends BaseProcessor {
           continue;
         }
 
+        // Log full request details on final failure
+        this.logger.error({
+          error: lastError,
+          message: lastError.message,
+          stack: lastError.stack,
+          subscription_id,
+          user_id,
+          texts: Array.isArray(promptsToAnalyze) ? promptsToAnalyze : [promptsToAnalyze],
+          retries,
+          phase: 'analyze_content_failed'
+        }, 'BOE analysis failed after all retries');
+
         // Rethrow with more context after all retries are exhausted
         const errorMessage = error.response?.data?.error || error.message;
         const enhancedError = new Error(`BOE analysis failed: ${errorMessage}`);
@@ -158,8 +226,7 @@ class BOEProcessor extends BaseProcessor {
           response: error.response?.data,
           status: error.response?.status,
           request_id: error.response?.headers?.['x-request-id'],
-          retries,
-          total_time: Date.now() - requestStartTime
+          retries
         };
         throw enhancedError;
       }
