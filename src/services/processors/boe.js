@@ -37,7 +37,7 @@ class BOEProcessor extends BaseProcessor {
       timeout: 120000, // 2 minute timeout
       headers: {
         'Content-Type': 'application/json',
-        ...(config.BOE_API_KEY && { 'x-api-key': config.BOE_API_KEY })
+        ...(config.BOE_API_KEY && { 'Authorization': `Bearer ${config.BOE_API_KEY}` })
       }
     });
 
