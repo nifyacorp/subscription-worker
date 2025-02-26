@@ -6,6 +6,7 @@ require('dotenv').config();
 const { getLogger } = require('./config/logger');
 const { initializePool } = require('./config/database');
 const { getSecret, initialize: initializeSecrets } = require('./config/secrets');
+const { initializePubSub } = require('./config/pubsub');
 const SubscriptionProcessor = require('./services/subscription');
 const createBOERouter = require('./routes/boe');
 const createHealthRouter = require('./routes/health'); 
@@ -69,6 +70,11 @@ async function startServer() {
     logger.debug('Initializing Secret Manager');
     await initializeSecrets();
     logger.debug('Secret Manager initialized');
+
+    // Initialize PubSub
+    logger.debug('Initializing PubSub');
+    await initializePubSub();
+    logger.debug('PubSub initialized');
 
     // Initialize services
     logger.debug('Initializing database pool');

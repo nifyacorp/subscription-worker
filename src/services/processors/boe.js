@@ -120,45 +120,73 @@ class BOEProcessor extends BaseProcessor {
     // Extract prompts from the subscription - handle all possible locations and missing data
     let prompts = [];
     
-    try {
-      if (Array.isArray(subscription.prompts) && subscription.prompts.length > 0) {
-        prompts = subscription.prompts;
-        this.logger.debug('Using prompts from subscription.prompts', { count: prompts.length });
-      } else if (subscription.metadata && Array.isArray(subscription.metadata.prompts) && subscription.metadata.prompts.length > 0) {
-        prompts = subscription.metadata.prompts;
-        this.logger.debug('Using prompts from subscription.metadata.prompts', { count: prompts.length });
-      } else {
-        // Try to retrieve prompts from other places
-        if (typeof subscription.prompts === 'string') {
-          try {
-            // Try to parse string as JSON
-            const parsedPrompts = JSON.parse(subscription.prompts);
-            if (Array.isArray(parsedPrompts) && parsedPrompts.length > 0) {
-              prompts = parsedPrompts;
-              this.logger.debug('Using prompts parsed from string', { count: prompts.length });
-            }
-          } catch (parseError) {
-            // If it's not JSON, use the string as a single prompt
-            prompts = [subscription.prompts];
-            this.logger.debug('Using prompts string as single prompt');
-          }
-        }
-      }
-    } catch (promptError) {
-      this.logger.error('Error extracting prompts from subscription', {
-        error: promptError.message,
-        subscription_preview: JSON.stringify(subscription).substring(0, 200) + '...'
+    // More detailed logging about where we're looking for prompts
+    this.logger.debug('Searching for prompts in subscription data', {
+      subscription_id: subscription_id || 'unknown',
+      has_prompts_direct: Array.isArray(subscription.prompts),
+      has_prompts_metadata: subscription.metadata && Array.isArray(subscription.metadata.prompts),
+      has_text_direct: Array.isArray(subscription.texts),
+      has_text_metadata: subscription.metadata && Array.isArray(subscription.metadata.texts),
+      metadata_keys: subscription.metadata ? Object.keys(subscription.metadata) : []
+    });
+    
+    // Check different possible locations for the prompts
+    if (Array.isArray(subscription.prompts)) {
+      // Direct prompts array
+      prompts = subscription.prompts;
+      this.logger.debug('Found prompts directly in subscription', { 
+        prompt_count: prompts.length,
+        first_prompt: prompts.length > 0 ? prompts[0] : null
+      });
+    } else if (subscription.metadata && Array.isArray(subscription.metadata.prompts)) {
+      // Prompts in metadata
+      prompts = subscription.metadata.prompts;
+      this.logger.debug('Found prompts in subscription metadata', { 
+        prompt_count: prompts.length,
+        first_prompt: prompts.length > 0 ? prompts[0] : null
+      });
+    } else if (Array.isArray(subscription.texts)) {
+      // Direct texts array (alternative name)
+      prompts = subscription.texts;
+      this.logger.debug('Found texts directly in subscription', { 
+        prompt_count: prompts.length,
+        first_prompt: prompts.length > 0 ? prompts[0] : null 
+      });
+    } else if (subscription.metadata && Array.isArray(subscription.metadata.texts)) {
+      // Texts in metadata (alternative name)
+      prompts = subscription.metadata.texts;
+      this.logger.debug('Found texts in subscription metadata', { 
+        prompt_count: prompts.length,
+        first_prompt: prompts.length > 0 ? prompts[0] : null
       });
     }
     
-    // If still no prompts, use a default
-    if (!prompts.length) {
-      const defaultPrompt = 'Información general del BOE';
-      this.logger.warn('Using default prompt as none was provided', {
-        subscription_id: subscription_id || 'unknown',
-        default_prompt: defaultPrompt
-      });
-      prompts = [defaultPrompt];
+    // If no prompts found, check other potential locations or use default
+    if (prompts.length === 0) {
+      if (typeof subscription.prompt === 'string') {
+        // Single prompt as string
+        prompts = [subscription.prompt];
+        this.logger.debug('Found single prompt string in subscription', { prompt: subscription.prompt });
+      } else if (subscription.metadata && typeof subscription.metadata.prompt === 'string') {
+        // Single prompt in metadata
+        prompts = [subscription.metadata.prompt];
+        this.logger.debug('Found single prompt string in subscription metadata', { prompt: subscription.metadata.prompt });
+      } else if (typeof subscription.text === 'string') {
+        // Single text as string (alternative name)
+        prompts = [subscription.text];
+        this.logger.debug('Found single text string in subscription', { text: subscription.text });
+      } else if (subscription.metadata && typeof subscription.metadata.text === 'string') {
+        // Single text in metadata (alternative name)
+        prompts = [subscription.metadata.text];
+        this.logger.debug('Found single text string in subscription metadata', { text: subscription.metadata.text });
+      } else {
+        // Use default prompt if none found
+        prompts = ['Información general del BOE'];
+        this.logger.warn('No prompts found in subscription data, using default', {
+          subscription_id: subscription_id || 'unknown',
+          default_prompt: prompts[0]
+        });
+      }
     }
     
     try {
@@ -217,18 +245,33 @@ class BOEProcessor extends BaseProcessor {
       prompts = ['Información general del BOE'];
     }
     
+    // Filter out any non-string prompts and ensure they're non-empty
+    prompts = prompts
+      .filter(prompt => typeof prompt === 'string' && prompt.trim().length > 0)
+      .map(prompt => prompt.trim());
+      
+    // If after filtering we have no valid prompts, use a default
+    if (prompts.length === 0) {
+      this.logger.warn('No valid prompts after filtering, using default');
+      prompts = ['Información general del BOE'];
+    }
+    
+    // Ensure we have valid IDs, using defaults if needed
+    const safeSubscriptionId = subscriptionId || 'system-subscription-' + Date.now();
+    const safeUserId = userId || 'system-user-' + Date.now();
+    
     this.logger.debug('Analyzing BOE content', { 
       prompts,
-      subscriptionId,
-      userId 
+      subscription_id: safeSubscriptionId,
+      user_id: safeUserId 
     });
     
     try {
       const requestBody = {
-        texts: prompts,
+        texts: prompts, // Using 'texts' as the key as expected by the BOE parser
         metadata: {
-          user_id: userId || 'system-user',
-          subscription_id: subscriptionId || 'system-subscription',
+          user_id: safeUserId,
+          subscription_id: safeSubscriptionId,
         },
         limit: 5,
         date: new Date().toISOString().split('T')[0]
@@ -248,11 +291,16 @@ class BOEProcessor extends BaseProcessor {
         status: response.status,
         data_size: JSON.stringify(response.data).length,
         results_count: response.data?.results?.length || 0,
-        response_success: !!response.data
+        response_success: !!response.data,
+        data_preview: JSON.stringify(response.data).substring(0, 200) + '...'
       });
       
       // Ensure we return a standard format even if the response is unexpected
       if (!response.data) {
+        this.logger.warn('Empty response from BOE API', {
+          subscription_id: safeSubscriptionId,
+          status_code: response.status
+        });
         return { entries: [], status: 'empty_response' };
       }
       
@@ -262,16 +310,35 @@ class BOEProcessor extends BaseProcessor {
         const entries = [];
         
         // Each result corresponds to one prompt
-        response.data.results.forEach(result => {
+        response.data.results.forEach((result, index) => {
+          const currentPrompt = prompts[index] || 'unknown';
+          
           if (result.matches && Array.isArray(result.matches)) {
             // Add the prompt to each match for tracking
             const matchesWithPrompt = result.matches.map(match => ({
               ...match,
-              prompt: result.prompt
+              prompt: currentPrompt
             }));
             entries.push(...matchesWithPrompt);
+            
+            this.logger.debug('Processed matches for prompt', {
+              prompt: currentPrompt,
+              matches_count: result.matches.length
+            });
+          } else {
+            this.logger.warn('No matches for prompt', {
+              prompt: currentPrompt,
+              result_keys: Object.keys(result)
+            });
           }
         });
+        
+        if (entries.length === 0) {
+          this.logger.info('No matches found in any results', {
+            subscription_id: safeSubscriptionId,
+            prompt_count: prompts.length
+          });
+        }
         
         return { 
           entries,
@@ -297,7 +364,8 @@ class BOEProcessor extends BaseProcessor {
       return { 
         entries: [],
         status: 'error',
-        error: error.message
+        error: error.message,
+        timestamp: new Date().toISOString()
       };
     }
   }
