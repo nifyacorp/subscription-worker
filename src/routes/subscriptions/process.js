@@ -254,7 +254,9 @@ function createProcessRouter(subscriptionProcessor) {
       body: req.body,
       body_size: req.body ? JSON.stringify(req.body).length : 0,
       body_type: typeof req.body,
-      body_length: req.body ? Object.keys(req.body).length : 0,
+      body_content: JSON.stringify(req.body).substring(0, 100),
+      body_null: req.body === null,
+      body_undefined: req.body === undefined,
       headers: req.headers,
       content_type: req.headers['content-type'],
       content_length: req.headers['content-length'],
@@ -273,6 +275,9 @@ function createProcessRouter(subscriptionProcessor) {
         content_length: req.headers['content-length'],
         phase: 'empty_request_body'
       });
+      
+      // Ensure req.body is at least an empty object, not null or undefined
+      req.body = req.body || {};
     }
     
     // Validate the subscription ID
@@ -308,34 +313,51 @@ function createProcessRouter(subscriptionProcessor) {
       
       // Process the subscription using only the ID - the processor will fetch the subscription details
       logger.info('Processing subscription', { subscription_id: id });
-      const result = await subscriptionProcessor.processSubscription(id);
       
-      // Handle processor error responses
-      if (result && result.status === 'error') {
-        logger.warn('Processor returned error status', {
+      try {
+        const result = await subscriptionProcessor.processSubscription(id);
+        
+        // Handle processor error responses
+        if (result && result.status === 'error') {
+          logger.warn('Processor returned error status', {
+            subscription_id: id,
+            error_message: result.error || 'Unknown error',
+            result: JSON.stringify(result).substring(0, 200)
+          });
+          return res.status(400).json({
+            status: 'error',
+            error: result.error || 'Error processing subscription',
+            message: 'The subscription could not be processed due to an error',
+            subscription_id: id
+          });
+        }
+        
+        // Return successful response
+        logger.info('Subscription queued for processing', { 
           subscription_id: id,
-          error_message: result.error || 'Unknown error'
+          result: result 
         });
-        return res.status(400).json({
+        
+        return res.status(202).json({
+          status: 'success',
+          message: 'Subscription queued for processing',
+          processing_id: result.processing_id || 'unknown',
+          subscription_id: id
+        });
+      } catch (processorError) {
+        logger.error('Error in subscription processor', {
+          subscription_id: id,
+          error: processorError.message,
+          stack: processorError.stack
+        });
+        
+        return res.status(500).json({
           status: 'error',
-          error: result.error || 'Error processing subscription',
-          message: 'The subscription could not be processed due to an error',
+          error: 'Error in subscription processor',
+          message: processorError.message,
           subscription_id: id
         });
       }
-      
-      // Return successful response
-      logger.info('Subscription queued for processing', { 
-        subscription_id: id,
-        result: result 
-      });
-      
-      return res.status(202).json({
-        status: 'success',
-        message: 'Subscription queued for processing',
-        processing_id: result.processing_id || 'unknown',
-        subscription_id: id
-      });
     } catch (error) {
       logger.error('Error processing subscription', {
         subscription_id: id,

@@ -529,7 +529,24 @@ class SubscriptionProcessor {
   async connectToDatabase() {
     try {
       // Connect to the database
+      this.logger.debug('Attempting to acquire database client from pool', {
+        pool_stats: {
+          total_count: this.pool.totalCount,
+          idle_count: this.pool.idleCount,
+          waiting_count: this.pool.waitingCount
+        }
+      });
+      
       const client = await this.pool.connect();
+      
+      this.logger.debug('Successfully acquired database client', {
+        connection_active: !!client,
+        pool_stats: {
+          total_count: this.pool.totalCount,
+          idle_count: this.pool.idleCount,
+          waiting_count: this.pool.waitingCount
+        }
+      });
       
       // Create a knex instance with the client
       const knex = require('knex')({
@@ -540,12 +557,34 @@ class SubscriptionProcessor {
       // Store client reference for cleanup in finally block
       knex.client = client;
       
-      this.logger.debug('Database connection established');
+      // Test the connection to ensure it's working
+      try {
+        const result = await knex.raw('SELECT 1 as test');
+        this.logger.debug('Database connection test successful', {
+          test_result: result.rows[0]
+        });
+      } catch (testError) {
+        this.logger.error('Database connection test failed', {
+          error: testError.message,
+          stack: testError.stack
+        });
+        // Throw the error to be caught by the outer try-catch
+        throw testError;
+      }
+      
+      this.logger.debug('Database connection established successfully');
       return knex;
     } catch (error) {
       this.logger.error('Failed to connect to database', {
         error: error.message,
-        stack: error.stack
+        error_code: error.code,
+        error_type: error.constructor.name,
+        stack: error.stack,
+        pool_stats: {
+          total_count: this.pool ? this.pool.totalCount : null,
+          idle_count: this.pool ? this.pool.idleCount : null,
+          waiting_count: this.pool ? this.pool.waitingCount : null
+        }
       });
       throw new Error(`Database connection failed: ${error.message}`);
     }
