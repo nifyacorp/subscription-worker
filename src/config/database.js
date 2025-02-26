@@ -4,6 +4,9 @@ const { getSecret } = require('./secrets');
 
 const logger = getLogger('database');
 
+// Check if running in development mode
+const isDevelopment = process.env.NODE_ENV === 'development' || !process.env.NODE_ENV;
+
 const INSTANCE_CONNECTION_NAME = process.env.PROJECT_ID 
   ? `${process.env.PROJECT_ID}:us-central1:nifya-db` 
   : 'delta-entity-447812-p2:us-central1:nifya-db'; 
@@ -13,32 +16,54 @@ async function createPoolConfig() {
     instanceConnectionName: INSTANCE_CONNECTION_NAME,
     nodeEnv: process.env.NODE_ENV,
     projectId: process.env.PROJECT_ID,
-    socketPath: `/cloudsql/${INSTANCE_CONNECTION_NAME}`
+    socketPath: `/cloudsql/${INSTANCE_CONNECTION_NAME}`,
+    mode: isDevelopment ? 'development' : 'production'
   }, 'Starting pool configuration');
 
   try {
-    logger.debug('Starting secrets retrieval from Secret Manager');
-    const secretsStartTime = Date.now();
-    
-    const [dbName, dbUser, dbPassword] = await Promise.all([
-      getSecret('DB_NAME'),
-      getSecret('DB_USER'),
-      getSecret('DB_PASSWORD'),
-    ]);
-    
-    logger.debug({
-      secrets_retrieval_time: Date.now() - secretsStartTime,
-      secrets_retrieved: ['DB_NAME', 'DB_USER', 'DB_PASSWORD'],
-      dbNameLength: dbName?.length,
-      dbUserLength: dbUser?.length,
-      dbPasswordExists: !!dbPassword
-    }, 'Completed secrets retrieval');
+    let dbName, dbUser, dbPassword;
+
+    if (isDevelopment) {
+      // In development mode, use environment variables directly
+      logger.debug('Using environment variables for database config in development mode');
+      dbName = process.env.DB_NAME || 'nifya_db';
+      dbUser = process.env.DB_USER || 'postgres';
+      dbPassword = process.env.DB_PASSWORD || 'postgres';
+      
+      logger.debug({
+        dbName,
+        dbUser,
+        dbPassword: dbPassword ? '********' : undefined,
+        mode: 'development'
+      }, 'Using development database configuration');
+    } else {
+      // In production, get secrets from Secret Manager
+      logger.debug('Starting secrets retrieval from Secret Manager');
+      const secretsStartTime = Date.now();
+      
+      [dbName, dbUser, dbPassword] = await Promise.all([
+        getSecret('DB_NAME'),
+        getSecret('DB_USER'),
+        getSecret('DB_PASSWORD'),
+      ]);
+      
+      logger.debug({
+        secrets_retrieval_time: Date.now() - secretsStartTime,
+        secrets_retrieved: ['DB_NAME', 'DB_USER', 'DB_PASSWORD'],
+        dbNameLength: dbName?.length,
+        dbUserLength: dbUser?.length,
+        dbPasswordExists: !!dbPassword
+      }, 'Completed secrets retrieval');
+    }
 
     const config = {
       user: dbUser,
       password: dbPassword,
       database: dbName,
-      ...(process.env.NODE_ENV === 'production' ? {
+      ...(isDevelopment || process.env.NODE_ENV !== 'production' ? {
+        host: 'localhost',
+        port: 5432
+      } : {
         host: `/cloudsql/${INSTANCE_CONNECTION_NAME}`,
         max: 20,
         idleTimeoutMillis: 30000,
@@ -48,9 +73,6 @@ async function createPoolConfig() {
         query_timeout: 10000,
         keepalive: true,
         keepaliveInitialDelayMillis: 10000
-      } : {
-        host: 'localhost',
-        port: 5432
       })
     };
 
@@ -62,7 +84,8 @@ async function createPoolConfig() {
       idleTimeoutMillis: config.idleTimeoutMillis,
       connectionTimeoutMillis: config.connectionTimeoutMillis,
       environment: process.env.NODE_ENV,
-      socketExists: process.env.NODE_ENV === 'production' ? 
+      mode: isDevelopment ? 'development' : 'production',
+      socketExists: !isDevelopment && process.env.NODE_ENV === 'production' ? 
         require('fs').existsSync(`/cloudsql/${INSTANCE_CONNECTION_NAME}`) : 'N/A'
     }, 'Pool configuration created');
 

@@ -13,6 +13,8 @@ COPY . .
 
 # Set environment variables
 ENV NODE_ENV=production
+ENV PORT=8080
+ENV PARSER_BASE_URL=https://boe-parser-415554190254.us-central1.run.app
 
 # Expose port
 EXPOSE 8080

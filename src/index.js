@@ -76,10 +76,42 @@ async function startServer() {
     await initializePubSub();
     logger.debug('PubSub initialized');
 
+    // Check if we're in development mode
+    const isDevelopment = process.env.NODE_ENV === 'development' || !process.env.NODE_ENV;
+    
     // Initialize services
     logger.debug('Initializing database pool');
-    const pool = await initializePool();
-    logger.debug('Database pool initialized');
+    let pool;
+    try {
+      pool = await initializePool();
+      logger.debug('Database pool initialized');
+    } catch (error) {
+      if (isDevelopment) {
+        logger.warn({ 
+          error: error.message,
+          code: error.code,
+          phase: 'database_initialization'
+        }, 'Failed to connect to database in development mode, continuing with mock database');
+        // Create a mock pool for development
+        pool = {
+          query: async () => {
+            return { rows: [] };
+          },
+          connect: async () => {
+            return {
+              query: async () => {
+                return { rows: [] };
+              },
+              release: () => {}
+            };
+          },
+          end: async () => {}
+        };
+      } else {
+        // In production, database is required
+        throw error;
+      }
+    }
 
     // Make parser API key optional
     let parserApiKey;
@@ -126,7 +158,8 @@ async function startServer() {
         phase: 'server_started',
         port,
         node_env: process.env.NODE_ENV,
-        project_id: process.env.PROJECT_ID
+        project_id: process.env.PROJECT_ID,
+        mode: isDevelopment ? 'development' : 'production'
       }, 'Server started successfully');
     });
     

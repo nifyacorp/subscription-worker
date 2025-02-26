@@ -4,8 +4,14 @@ const { getSecret } = require('./secrets');
 
 const logger = getLogger('pubsub');
 
-// Initialize PubSub client
-const pubsub = new PubSub();
+// Check if running in development mode
+const isDevelopment = process.env.NODE_ENV === 'development' || !process.env.NODE_ENV;
+
+// Initialize PubSub client only in production
+let pubsub;
+if (!isDevelopment) {
+  pubsub = new PubSub();
+}
 
 // Topic names (will be loaded from environment or secrets)
 let emailImmediateTopic;
@@ -24,7 +30,8 @@ async function initializePubSub() {
     
     logger.info({
       emailImmediateTopic,
-      emailDailyTopic
+      emailDailyTopic,
+      mode: isDevelopment ? 'development' : 'production'
     }, 'PubSub topics initialized');
     
     return {
@@ -77,6 +84,18 @@ async function publishEmailNotification(notification, user, subscription, freque
       subscriptionName: subscription.name || subscription.type_name || 'Subscription'
     }
   };
+  
+  // In development mode, just log the message instead of publishing
+  if (isDevelopment) {
+    const mockMessageId = `dev-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+    logger.info({
+      messageId: mockMessageId,
+      topic,
+      message,
+      mode: 'development'
+    }, 'Development mode: Would have published notification to email service');
+    return mockMessageId;
+  }
   
   try {
     const dataBuffer = Buffer.from(JSON.stringify(message));
