@@ -20,41 +20,46 @@ let emailDailyTopic;
 /**
  * Initialize PubSub configuration by loading topic names from secrets
  */
-async function initializePubSub() {
-  logger.info('Initializing PubSub configuration');
+const initializePubSub = async () => {
+  const logger = getLogger('pubsub');
   
   try {
-    // Load topic names from secrets or use defaults
-    emailImmediateTopic = await getSecret('EMAIL_IMMEDIATE_TOPIC_NAME') || 'email-notifications-immediate';
-    emailDailyTopic = await getSecret('EMAIL_DAILY_TOPIC_NAME') || 'email-notifications-daily';
+    logger.info('Initializing PubSub configuration');
     
-    logger.info({
-      emailImmediateTopic,
-      emailDailyTopic,
-      mode: isDevelopment ? 'development' : 'production'
-    }, 'PubSub topics initialized');
+    // Create PubSub client
+    const pubSubClient = new PubSub({
+      projectId: process.env.PROJECT_ID,
+    });
+    
+    // Skip trying to access the email topics for now
+    /*
+    // Original code:
+    const emailImmediateTopicName = await getSecret('EMAIL_IMMEDIATE_TOPIC_NAME');
+    const emailDailyTopicName = await getSecret('EMAIL_DAILY_TOPIC_NAME');
+    
+    const emailImmediateTopic = pubSubClient.topic(emailImmediateTopicName);
+    const emailDailyTopic = pubSubClient.topic(emailDailyTopicName);
+    */
+    
+    // Return a simpler configuration that doesn't need the topics
+    logger.info('PubSub client initialized without email notification topics', {
+      mode: process.env.NODE_ENV || 'development'
+    });
     
     return {
-      emailImmediateTopic,
-      emailDailyTopic
+      pubSubClient,
+      // Not providing the email topics for now
+      emailImmediateTopic: null,
+      emailDailyTopic: null
     };
   } catch (error) {
-    logger.error({
-      error: error.message,
-      stack: error.stack
-    }, 'Failed to initialize PubSub configuration');
-    
-    // Use default values as fallback
-    emailImmediateTopic = 'email-notifications-immediate';
-    emailDailyTopic = 'email-notifications-daily';
-    
-    return {
-      emailImmediateTopic,
-      emailDailyTopic,
+    logger.error('Failed to initialize PubSub configuration', {
+      stack: error.stack,
       error: error.message
-    };
+    });
+    throw error;
   }
-}
+};
 
 /**
  * Publish a notification to the email service

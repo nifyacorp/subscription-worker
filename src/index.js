@@ -77,7 +77,7 @@ async function startServer() {
 
     // Initialize PubSub
     logger.debug('Initializing PubSub');
-    await initializePubSub();
+    const pubsubConfig = await initializePubSub();
     logger.debug('PubSub initialized');
 
     // Check if we're in development mode
