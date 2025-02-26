@@ -62,10 +62,15 @@ async function createPoolConfig() {
       database: dbName,
       ...(isDevelopment || process.env.NODE_ENV !== 'production' ? {
         host: 'localhost',
-        port: 5432
+        port: 5432,
+        max: 10,
+        idleTimeoutMillis: 30000,
+        connectionTimeoutMillis: 5000,
+        application_name: 'subscription-processor-dev'
       } : {
         host: `/cloudsql/${INSTANCE_CONNECTION_NAME}`,
         max: 20,
+        min: 2,
         idleTimeoutMillis: 30000,
         connectionTimeoutMillis: 5000,
         application_name: 'subscription-processor',
@@ -76,11 +81,21 @@ async function createPoolConfig() {
       })
     };
 
+    config.error = (err, client) => {
+      logger.error({
+        error: err,
+        client_active: !!client,
+        error_code: err.code,
+        error_message: err.message
+      }, 'Database pool client error');
+    };
+
     logger.debug({
       host: config.host,
       database: config.database,
       user: config.user,
       max: config.max,
+      min: config.min || 0,
       idleTimeoutMillis: config.idleTimeoutMillis,
       connectionTimeoutMillis: config.connectionTimeoutMillis,
       environment: process.env.NODE_ENV,

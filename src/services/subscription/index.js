@@ -51,16 +51,52 @@ class SubscriptionProcessor {
    * @param {string} subscriptionId - The ID of the subscription to process
    * @returns {Promise<object>} Processing result
    */
-  async processSubscription(subscriptionId) {
+  async processSubscription(subscriptionId, options = {}) {
+    const logger = this.logger.child({ 
+      subscription_id: subscriptionId,
+      context: 'process_subscription'
+    });
+    
+    logger.debug('Processing subscription', { 
+      options: JSON.stringify(options),
+      subscription_id: subscriptionId
+    });
+
+    // Check if we're using a mock pool
+    if (this.pool && this.pool._mockPool) {
+      logger.error('Cannot process subscription with mock database pool', { 
+        subscription_id: subscriptionId,
+        mock_pool: true
+      });
+      return {
+        status: 'error',
+        error: 'Database unavailable',
+        message: 'The subscription processor is using a mock database pool. Please ensure PostgreSQL is running and accessible.',
+        retryable: true,
+        subscription_id: subscriptionId
+      };
+    }
+    
+    // Ensure we have a subscription ID
+    if (!subscriptionId) {
+      logger.error('No subscription ID provided');
+      return {
+        status: 'error',
+        error: 'Missing subscription ID',
+        message: 'A subscription ID is required to process a subscription',
+        retryable: false
+      };
+    }
+
     // Enhanced logging for tracking
-    this.logger.info('Processing subscription', { 
+    logger.info('Processing subscription', { 
       subscription_id: subscriptionId,
       process_started_at: new Date().toISOString()
     });
 
     // Check for a valid subscription id
     if (!subscriptionId || subscriptionId === 'undefined' || subscriptionId === 'null') {
-      this.logger.error('Invalid subscription id provided', { subscription_id: subscriptionId });
+      logger.error('Invalid subscription id provided', { subscription_id: subscriptionId });
       return { 
         status: 'error',
         error: 'Invalid subscription id provided',
@@ -69,9 +105,47 @@ class SubscriptionProcessor {
     }
 
     let knex;
-    try {
-      knex = await this.connectToDatabase();
+    let connectionAttempts = 0;
+    const MAX_CONNECTION_ATTEMPTS = 3;
+    
+    // Try to establish a database connection with retries
+    while (connectionAttempts < MAX_CONNECTION_ATTEMPTS) {
+      connectionAttempts++;
+      try {
+        logger.debug(`Database connection attempt ${connectionAttempts}/${MAX_CONNECTION_ATTEMPTS}`, {
+          subscription_id: subscriptionId
+        });
+        
+        knex = await this.connectToDatabase();
+        break; // Connection successful, exit the retry loop
+      } catch (connectionError) {
+        // If we've reached the max attempts, throw the error
+        if (connectionAttempts >= MAX_CONNECTION_ATTEMPTS) {
+          logger.error(`Failed to connect to database after ${MAX_CONNECTION_ATTEMPTS} attempts`, {
+            subscription_id: subscriptionId,
+            error: connectionError.message
+          });
+          return {
+            status: 'error',
+            error: `Database connection failed after ${MAX_CONNECTION_ATTEMPTS} attempts: ${connectionError.message}`,
+            subscription_id: subscriptionId,
+            retryable: true
+          };
+        }
+        
+        // Log the error and retry
+        logger.warn(`Database connection attempt ${connectionAttempts} failed, retrying...`, {
+          subscription_id: subscriptionId,
+          error: connectionError.message,
+          retry_count: connectionAttempts
+        });
+        
+        // Wait a bit before retrying
+        await new Promise(resolve => setTimeout(resolve, 1000 * connectionAttempts));
+      }
+    }
 
+    try {
       // Query for the subscription
       let subscription = await knex('subscriptions')
         .where('id', subscriptionId)
@@ -79,7 +153,7 @@ class SubscriptionProcessor {
 
       // Check if the subscription exists
       if (!subscription) {
-        this.logger.error('Subscription not found', { subscription_id: subscriptionId });
+        logger.error('Subscription not found', { subscription_id: subscriptionId });
         return {
           status: 'error',
           error: `Subscription not found for id: ${subscriptionId}`,
@@ -89,14 +163,14 @@ class SubscriptionProcessor {
 
       // Check if the subscription is active but continue processing regardless
       if (!subscription.is_active) {
-        this.logger.warn('Subscription is not active', { 
+        logger.warn('Subscription is not active', { 
           subscription_id: subscriptionId,
           is_active: false
         });
         // We'll still process it, but log a warning
       }
 
-      this.logger.debug('Found subscription', {
+      logger.debug('Found subscription', {
         subscription_id: subscriptionId,
         type_slug: subscription.type_slug,
         type_id: subscription.type_id,
@@ -119,7 +193,7 @@ class SubscriptionProcessor {
             try {
               subscriptionData.metadata = JSON.parse(subscription.metadata);
             } catch (parseError) {
-              this.logger.warn('Failed to parse metadata as JSON', {
+              logger.warn('Failed to parse metadata as JSON', {
                 subscription_id: subscriptionId,
                 error: parseError.message,
                 metadata: subscription.metadata.substring(0, 100)
@@ -131,13 +205,13 @@ class SubscriptionProcessor {
           // Add prompts directly to the subscription data for easier access by processors
           if (subscriptionData.metadata && subscriptionData.metadata.prompts) {
             subscriptionData.prompts = subscriptionData.metadata.prompts;
-            this.logger.debug('Extracted prompts from metadata', {
+            logger.debug('Extracted prompts from metadata', {
               subscription_id: subscriptionId,
               prompt_count: Array.isArray(subscriptionData.prompts) ? subscriptionData.prompts.length : 'not an array'
             });
           }
         } catch (metadataError) {
-          this.logger.error('Error processing subscription metadata', {
+          logger.error('Error processing subscription metadata', {
             subscription_id: subscriptionId,
             error: metadataError.message
           });
@@ -150,7 +224,7 @@ class SubscriptionProcessor {
       const processor = this.getProcessorForSubscription(subscription);
       
       if (!processor) {
-        this.logger.error('No processor found for subscription type', {
+        logger.error('No processor found for subscription type', {
           subscription_id: subscriptionId,
           type_slug: subscription.type_slug,
           type_id: subscription.type_id,
@@ -165,7 +239,7 @@ class SubscriptionProcessor {
         };
       }
 
-      this.logger.debug('Using processor for subscription', {
+      logger.debug('Using processor for subscription', {
         subscription_id: subscriptionId,
         processor_type: processor.constructor.name,
         has_process_method: typeof processor.processSubscription === 'function'
@@ -174,7 +248,7 @@ class SubscriptionProcessor {
       // Check if the processor has the required method
       if (typeof processor.processSubscription !== 'function') {
         const errorMessage = `Processor does not have processSubscription method`;
-        this.logger.error(errorMessage, {
+        logger.error(errorMessage, {
           subscription_id: subscriptionId,
           processor_type: processor.constructor.name
         });
@@ -190,7 +264,7 @@ class SubscriptionProcessor {
       // Try to process the subscription and handle any errors gracefully
       try {
         // Process the subscription asynchronously - pass the full subscription data
-        this.logger.info('Starting subscription processing', {
+        logger.info('Starting subscription processing', {
           subscription_id: subscriptionId,
           processor: processor.constructor.name
         });
@@ -198,7 +272,7 @@ class SubscriptionProcessor {
         // Call the processor to process the subscription
         const result = await processor.processSubscription(subscriptionData);
         
-        this.logger.info('Subscription processing completed', {
+        logger.info('Subscription processing completed', {
           subscription_id: subscriptionId,
           status: result?.status || 'unknown',
           matches_count: result?.matches?.length || 0,
@@ -208,7 +282,7 @@ class SubscriptionProcessor {
         
         // Handle error status from processor
         if (result && result.status === 'error') {
-          this.logger.warn('Processor returned error status', {
+          logger.warn('Processor returned error status', {
             subscription_id: subscriptionId,
             error: result.error,
             processor: processor.constructor.name
@@ -234,7 +308,7 @@ class SubscriptionProcessor {
           completed_at: new Date().toISOString()
         };
       } catch (error) {
-        this.logger.error('Error during subscription processing', {
+        logger.error('Error during subscription processing', {
           subscription_id: subscriptionId,
           error: error.message,
           stack: error.stack
@@ -254,14 +328,14 @@ class SubscriptionProcessor {
           try {
             await knex.destroy();
           } catch (dbError) {
-            this.logger.error('Error closing database connection', { 
+            logger.error('Error closing database connection', { 
               error: dbError.message 
             });
           }
         }
       }
     } catch (error) {
-      this.logger.error('Error in subscription processing workflow', {
+      logger.error('Error in subscription processing workflow', {
         subscription_id: subscriptionId,
         error: error.message,
         stack: error.stack
@@ -301,7 +375,7 @@ class SubscriptionProcessor {
           })
           .returning('*');
         
-        this.logger.debug('Updated processing record with error status', {
+        logger.debug('Updated processing record with error status', {
           subscription_id: subscriptionId,
           processing_id: processingRecord.id,
           error: errorMessage
@@ -320,7 +394,7 @@ class SubscriptionProcessor {
           })
           .returning('*');
         
-        this.logger.debug('Created new processing record with error status', {
+        logger.debug('Created new processing record with error status', {
           subscription_id: subscriptionId,
           processing_id: newRecord[0].id,
           error: errorMessage
@@ -329,7 +403,7 @@ class SubscriptionProcessor {
         return newRecord[0];
       }
     } catch (error) {
-      this.logger.error('Error updating processing record', {
+      logger.error('Error updating processing record', {
         subscription_id: subscriptionId,
         error: error.message
       });
@@ -362,7 +436,7 @@ class SubscriptionProcessor {
           })
           .returning('*');
         
-        this.logger.debug('Updated processing record with success status', {
+        logger.debug('Updated processing record with success status', {
           subscription_id: subscriptionId,
           processing_id: processingRecord.id
         });
@@ -379,7 +453,7 @@ class SubscriptionProcessor {
           })
           .returning('*');
         
-        this.logger.debug('Created new processing record with success status', {
+        logger.debug('Created new processing record with success status', {
           subscription_id: subscriptionId,
           processing_id: newRecord[0].id
         });
@@ -387,7 +461,7 @@ class SubscriptionProcessor {
         return newRecord[0];
       }
     } catch (error) {
-      this.logger.error('Error updating processing record', {
+      logger.error('Error updating processing record', {
         subscription_id: subscriptionId,
         error: error.message
       });
@@ -527,6 +601,8 @@ class SubscriptionProcessor {
    * @returns {Promise<Object>} Knex instance
    */
   async connectToDatabase() {
+    let client = null;
+    
     try {
       // Connect to the database
       this.logger.debug('Attempting to acquire database client from pool', {
@@ -537,16 +613,31 @@ class SubscriptionProcessor {
         }
       });
       
-      const client = await this.pool.connect();
+      client = await this.pool.connect();
       
       this.logger.debug('Successfully acquired database client', {
         connection_active: !!client,
+        client_properties: client ? Object.keys(client) : [],
+        client_methods: client ? Object.getOwnPropertyNames(Object.getPrototypeOf(client)) : [],
         pool_stats: {
           total_count: this.pool.totalCount,
           idle_count: this.pool.idleCount,
           waiting_count: this.pool.waitingCount
         }
       });
+      
+      // Test basic connectivity with raw query first
+      try {
+        await client.query('SELECT 1 as connection_test');
+        this.logger.debug('Basic client query test successful');
+      } catch (rawQueryError) {
+        this.logger.error('Basic client query test failed', {
+          error: rawQueryError.message,
+          code: rawQueryError.code,
+          stack: rawQueryError.stack
+        });
+        throw rawQueryError;
+      }
       
       // Create a knex instance with the client
       const knex = require('knex')({
@@ -566,13 +657,18 @@ class SubscriptionProcessor {
       } catch (testError) {
         this.logger.error('Database connection test failed', {
           error: testError.message,
+          code: testError.code,
           stack: testError.stack
         });
-        // Throw the error to be caught by the outer try-catch
+        
+        // Don't release the client here, let the finally block handle it
         throw testError;
       }
       
       this.logger.debug('Database connection established successfully');
+      
+      // Let knex take over the client lifecycle
+      client = null;
       return knex;
     } catch (error) {
       this.logger.error('Failed to connect to database', {
@@ -587,6 +683,19 @@ class SubscriptionProcessor {
         }
       });
       throw new Error(`Database connection failed: ${error.message}`);
+    } finally {
+      // Clean up the client if it wasn't assigned to knex
+      if (client) {
+        try {
+          client.release();
+          this.logger.debug('Released database client in finally block');
+        } catch (releaseError) {
+          this.logger.error('Failed to release client in finally block', {
+            error: releaseError.message,
+            code: releaseError.code
+          });
+        }
+      }
     }
   }
 }

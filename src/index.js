@@ -15,6 +15,10 @@ const createSubscriptionRouter = require('./routes/subscriptions/index');
 const logger = getLogger('server');
 const expressLogger = expressPino({ logger });
 
+// Global variables and configuration
+let pool;
+let mockDatabaseMode = false;
+
 function validateEnvironment() {
   // Set PROJECT_ID from GOOGLE_CLOUD_PROJECT if not already set
   if (!process.env.PROJECT_ID) {
@@ -79,41 +83,46 @@ async function startServer() {
     // Check if we're in development mode
     const isDevelopment = process.env.NODE_ENV === 'development' || !process.env.NODE_ENV;
     
-    // Initialize services
+    // Initialize database connection pool
     logger.debug('Initializing database pool');
-    let pool;
     try {
       pool = await initializePool();
-      logger.debug('Database pool initialized');
-    } catch (error) {
+      
+      // Test the database connection
+      const client = await pool.connect();
+      client.release();
+      logger.info('Successfully connected to database');
+    } catch (dbError) {
+      logger.warn('Failed to connect to database', {
+        code: dbError.code,
+        phase: 'database_initialization',
+        error: dbError.message,
+        environment: process.env.NODE_ENV
+      });
+      
+      // In development, create a mock pool for non-critical operations
       if (isDevelopment) {
-        logger.warn({ 
-          error: error.message,
-          code: error.code,
-          phase: 'database_initialization'
-        }, 'Failed to connect to database in development mode, continuing with mock database');
-        // Create a mock pool for development
-        pool = {
-          query: async () => {
-            return { rows: [] };
-          },
-          connect: async () => {
-            return {
-              query: async () => {
-                return { rows: [] };
-              },
-              release: () => {}
-            };
-          },
-          end: async () => {}
-        };
+        mockDatabaseMode = true;
+        pool = createMockPool();
+        logger.info('Created mock database pool for development mode');
       } else {
-        // In production, database is required
-        throw error;
+        // In production, we should not continue without a database
+        logger.error('Database connection is required in production mode', {
+          error: dbError.message
+        });
+        throw dbError;
       }
     }
+    
+    // Initialize Express app
+    const app = express();
+    
+    // Store mock database mode in app state
+    app.locals.mockDatabaseMode = mockDatabaseMode;
+    
+    app.use(expressLogger);
+    app.use(express.json());
 
-    // Make parser API key optional
     let parserApiKey;
     try {
       parserApiKey = await getSecret('PARSER_API_KEY');
@@ -126,10 +135,24 @@ async function startServer() {
     const subscriptionProcessor = new SubscriptionProcessor(pool, parserApiKey);
     logger.info('Subscription processor initialized');
 
-    // Initialize Express app
-    const app = express();
-    app.use(expressLogger);
-    app.use(express.json());
+    // Add middleware to check mock database status before registering routes
+    app.use((req, res, next) => {
+      if (mockDatabaseMode && 
+          (req.path.includes('/process-subscription') || 
+           req.path.includes('/process-subscriptions'))) {
+        logger.warn('Attempt to process subscription with mock database', {
+          path: req.path,
+          method: req.method
+        });
+        return res.status(503).json({
+          status: 'error',
+          error: 'Database unavailable',
+          message: 'The subscription worker is running in mock database mode. Please ensure PostgreSQL is running and accessible.',
+          request_path: req.path
+        });
+      }
+      next();
+    });
 
     // Register routes
     app.use(createHealthRouter(pool));
@@ -167,18 +190,71 @@ async function startServer() {
     
     return { server, pool };
   } catch (error) {
-    logger.error({ 
-      phase: 'startup_failed',
+    logger.error('Failed to start server', {
       error,
-      errorName: error.name,
-      errorCode: error.code,
-      errorStack: error.stack,
-      errorMessage: error.message,
-      node_env: process.env.NODE_ENV,
-      project_id: process.env.PROJECT_ID
-    }, 'Failed to start server');
+      stack: error.stack
+    });
     process.exit(1);
   }
+}
+
+/**
+ * Creates a mock database pool for development mode when real database is unavailable
+ * This mock pool provides appropriate mock implementations and clear error messages
+ * @returns {Object} A mock pool that simulates a Postgres pool
+ */
+function createMockPool() {
+  logger.debug('Creating mock database pool');
+  
+  // Create a mock client that throws clear errors
+  const createMockClient = () => {
+    return {
+      query: () => {
+        throw new Error('Mock database client cannot execute queries. Please ensure PostgreSQL is running.');
+      },
+      release: () => {
+        logger.debug('Mock client released');
+      }
+    };
+  };
+  
+  // Return a mock pool with implementations that will fail gracefully with informative errors
+  return {
+    totalCount: 5,
+    idleCount: 5, 
+    waitingCount: 0,
+    
+    connect: async () => {
+      logger.debug('Mock database connect called');
+      if (Math.random() < 0.3) {
+        // Sometimes throw to simulate transient errors
+        throw new Error('Mock database connection temporarily unavailable (simulated error)');
+      }
+      return createMockClient();
+    },
+    
+    query: async () => {
+      logger.debug('Mock database query called');
+      throw new Error('Mock database pool cannot execute queries. Please ensure PostgreSQL is running.');
+    },
+    
+    on: (event, callback) => {
+      logger.debug(`Mock pool registered event listener for: ${event}`);
+      // If it's an error event, we could simulate by calling the callback
+      // if (event === 'error' && Math.random() < 0.1) {
+      //   callback(new Error('Mock pool simulated error'));
+      // }
+      return this;
+    },
+    
+    end: async () => {
+      logger.debug('Mock pool end called');
+      return Promise.resolve();
+    },
+    
+    // Flag to identify this as a mock pool
+    _mockPool: true
+  };
 }
 
 // Global error handlers

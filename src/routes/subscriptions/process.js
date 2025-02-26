@@ -71,7 +71,7 @@ async function processSubscriptionAsync(subscription, { pool, boeController }) {
     
     // Check if there's already an active processing
     const activeProcessingResult = await client.query(
-      `SELECT id, status FROM subscription_processings
+      `SELECT id, status FROM subscription_processing
        WHERE subscription_id = $1 AND status IN ('sending', 'processing')
        ORDER BY created_at DESC
        LIMIT 1`,
@@ -96,7 +96,7 @@ async function processSubscriptionAsync(subscription, { pool, boeController }) {
     
     try {
       const updateResult = await client.query(
-        `UPDATE subscription_processings
+        `UPDATE subscription_processing
          SET status = $1, updated_at = NOW()
          WHERE id = $2
          RETURNING id, status`,
@@ -132,7 +132,7 @@ async function processSubscriptionAsync(subscription, { pool, boeController }) {
         });
         
         const insertResult = await client.query(
-          `INSERT INTO subscription_processings
+          `INSERT INTO subscription_processing
            (subscription_id, status, metadata)
            VALUES ($1, $2, $3)
            RETURNING id, status`,
@@ -290,6 +290,20 @@ function createProcessRouter(subscriptionProcessor) {
     }
     
     try {
+      // Check if the app is running in mock database mode
+      if (req.app.locals && req.app.locals.mockDatabaseMode) {
+        logger.error('Cannot process subscription in mock database mode', { 
+          subscription_id: id,
+          mock_mode: true
+        });
+        return res.status(503).json({
+          status: 'error',
+          error: 'Database unavailable',
+          message: 'The service is currently running with a mock database. Please ensure PostgreSQL is running and accessible.',
+          subscription_id: id
+        });
+      }
+      
       // Validate that we have a processor
       if (!subscriptionProcessor) {
         logger.error('No subscription processor available', { subscription_id: id });
@@ -308,6 +322,22 @@ function createProcessRouter(subscriptionProcessor) {
         return res.status(500).json({
           error: 'Invalid processor configuration',
           message: 'The subscription processor is not properly configured'
+        });
+      }
+      
+      // Check if the pool is a mock pool
+      if (subscriptionProcessor.pool && 
+          subscriptionProcessor.pool.connect && 
+          subscriptionProcessor.pool.connect.toString().includes('Mock database')) {
+        logger.error('Cannot process subscription with mock database pool', { 
+          subscription_id: id,
+          mock_pool: true
+        });
+        return res.status(503).json({
+          status: 'error',
+          error: 'Database unavailable',
+          message: 'The subscription processor is using a mock database pool. Please ensure PostgreSQL is running and accessible.',
+          subscription_id: id
         });
       }
       
