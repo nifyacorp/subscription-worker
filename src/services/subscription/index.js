@@ -147,9 +147,12 @@ class SubscriptionProcessor {
 
     try {
       // Query for the subscription
-      let subscription = await knex('subscriptions')
-        .where('id', subscriptionId)
-        .first();
+      const subscriptionQueryResult = await knex.query(
+        'SELECT * FROM subscriptions WHERE id = $1 LIMIT 1', 
+        [subscriptionId]
+      );
+      
+      const subscription = subscriptionQueryResult.rows[0];
 
       // Check if the subscription exists
       if (!subscription) {
@@ -298,7 +301,14 @@ class SubscriptionProcessor {
         }
         
         // Update the processing record to completed status
-        const processingRecord = await this.updateProcessingSuccess(knex, subscriptionId);
+        const updateQuery = `
+          UPDATE subscription_processing 
+          SET status = 'completed', last_run_at = NOW(), next_run_at = NOW() + INTERVAL '1 day', updated_at = NOW()
+          WHERE subscription_id = $1
+          RETURNING *
+        `;
+        const processingRecordResult = await knex.query(updateQuery, [subscriptionId]);
+        const processingRecord = processingRecordResult.rows[0];
         
         return {
           status: 'success',
@@ -315,7 +325,13 @@ class SubscriptionProcessor {
         });
         
         // Attempt to update processing status as error
-        await this.updateProcessingError(knex, subscriptionId, error.message || 'Unknown error during processing');
+        const errorUpdateQuery = `
+          UPDATE subscription_processing 
+          SET status = 'failed', error = $2, updated_at = NOW()
+          WHERE subscription_id = $1
+          RETURNING *
+        `;
+        await knex.query(errorUpdateQuery, [subscriptionId, error.message || 'Unknown error during processing']);
         
         return {
           status: 'error',
@@ -358,55 +374,34 @@ class SubscriptionProcessor {
    */
   async updateProcessingError(knex, subscriptionId, errorMessage) {
     try {
-      // Try to find an existing processing record for this subscription
-      let processingRecord = await knex('subscription_processing')
-        .where('subscription_id', subscriptionId)
-        .orderBy('created_at', 'desc')
-        .first();
+      const query = `
+        UPDATE subscription_processing
+        SET status = 'failed', error = $2, updated_at = NOW()
+        WHERE subscription_id = $1
+        RETURNING *
+      `;
+      const result = await knex.query(query, [subscriptionId, errorMessage]);
       
-      if (processingRecord) {
-        // Update the existing record
-        const updated = await knex('subscription_processing')
-          .where('id', processingRecord.id)
-          .update({
-            status: 'error',
-            error_message: errorMessage || 'Unknown error',
-            updated_at: new Date()
-          })
-          .returning('*');
-        
-        logger.debug('Updated processing record with error status', {
-          subscription_id: subscriptionId,
-          processing_id: processingRecord.id,
-          error: errorMessage
-        });
-        
-        return updated[0];
-      } else {
-        // Create a new processing record
-        const newRecord = await knex('subscription_processing')
-          .insert({
-            subscription_id: subscriptionId,
-            status: 'error',
-            error_message: errorMessage || 'Unknown error',
-            created_at: new Date(),
-            updated_at: new Date()
-          })
-          .returning('*');
-        
-        logger.debug('Created new processing record with error status', {
-          subscription_id: subscriptionId,
-          processing_id: newRecord[0].id,
-          error: errorMessage
-        });
-        
-        return newRecord[0];
+      if (result.rows.length === 0) {
+        // If no processing record exists, create one
+        const insertQuery = `
+          INSERT INTO subscription_processing
+          (subscription_id, status, error, created_at, updated_at)
+          VALUES ($1, 'failed', $2, NOW(), NOW())
+          RETURNING *
+        `;
+        const insertResult = await knex.query(insertQuery, [subscriptionId, errorMessage]);
+        return insertResult.rows[0];
       }
+      
+      return result.rows[0];
     } catch (error) {
-      logger.error('Error updating processing record', {
+      this.logger.error('Error updating processing status to error', {
         subscription_id: subscriptionId,
-        error: error.message
+        error: error.message,
+        original_error: errorMessage
       });
+      // We don't throw here to avoid cascading errors
       return null;
     }
   }
@@ -419,52 +414,34 @@ class SubscriptionProcessor {
    */
   async updateProcessingSuccess(knex, subscriptionId) {
     try {
-      // Try to find an existing processing record for this subscription
-      let processingRecord = await knex('subscription_processing')
-        .where('subscription_id', subscriptionId)
-        .orderBy('created_at', 'desc')
-        .first();
+      // Update subscription_processing table
+      const query = `
+        UPDATE subscription_processing
+        SET status = 'completed', last_run_at = NOW(), next_run_at = NOW() + INTERVAL '1 day', updated_at = NOW()
+        WHERE subscription_id = $1
+        RETURNING *
+      `;
+      const result = await knex.query(query, [subscriptionId]);
       
-      if (processingRecord) {
-        // Update the existing record
-        const updated = await knex('subscription_processing')
-          .where('id', processingRecord.id)
-          .update({
-            status: 'completed',
-            error_message: null,
-            updated_at: new Date()
-          })
-          .returning('*');
-        
-        logger.debug('Updated processing record with success status', {
-          subscription_id: subscriptionId,
-          processing_id: processingRecord.id
-        });
-        
-        return updated[0];
-      } else {
-        // Create a new processing record
-        const newRecord = await knex('subscription_processing')
-          .insert({
-            subscription_id: subscriptionId,
-            status: 'completed',
-            created_at: new Date(),
-            updated_at: new Date()
-          })
-          .returning('*');
-        
-        logger.debug('Created new processing record with success status', {
-          subscription_id: subscriptionId,
-          processing_id: newRecord[0].id
-        });
-        
-        return newRecord[0];
+      if (result.rows.length === 0) {
+        // If no processing record exists, create one
+        const insertQuery = `
+          INSERT INTO subscription_processing
+          (subscription_id, status, last_run_at, next_run_at, created_at, updated_at)
+          VALUES ($1, 'completed', NOW(), NOW() + INTERVAL '1 day', NOW(), NOW())
+          RETURNING *
+        `;
+        const insertResult = await knex.query(insertQuery, [subscriptionId]);
+        return insertResult.rows[0];
       }
+      
+      return result.rows[0];
     } catch (error) {
-      logger.error('Error updating processing record', {
+      this.logger.error('Error updating processing status to success', {
         subscription_id: subscriptionId,
         error: error.message
       });
+      // We don't throw here to avoid cascading errors
       return null;
     }
   }
@@ -626,10 +603,74 @@ class SubscriptionProcessor {
         }
       });
       
-      // Test basic connectivity with raw query first
+      // Test basic connectivity with raw query
       try {
         await client.query('SELECT 1 as connection_test');
         this.logger.debug('Basic client query test successful');
+        
+        // Instead of creating a knex instance, we'll return a simplified wrapper
+        // that provides basic query functionality compatible with our code
+        return {
+          client: client,
+          // Basic query method
+          query: async (text, params) => {
+            return client.query(text, params);
+          },
+          // Raw query that mimics knex.raw
+          raw: async (text, params) => {
+            return client.query(text, params);
+          },
+          // Select from table
+          select: async (columns) => {
+            return {
+              from: async (table) => {
+                return {
+                  where: async (column, value) => {
+                    const query = `SELECT ${columns} FROM ${table} WHERE ${column} = $1`;
+                    const result = await client.query(query, [value]);
+                    return result.rows;
+                  },
+                  first: async () => {
+                    const query = `SELECT ${columns} FROM ${table} LIMIT 1`;
+                    const result = await client.query(query);
+                    return result.rows[0];
+                  }
+                };
+              }
+            };
+          },
+          // Method to simulate knex('table').where(...)
+          table: (tableName) => {
+            return {
+              where: (column, value) => {
+                return {
+                  first: async () => {
+                    const query = `SELECT * FROM ${tableName} WHERE ${column} = $1 LIMIT 1`;
+                    const result = await client.query(query, [value]);
+                    return result.rows[0] || null;
+                  },
+                  update: async (updates) => {
+                    // Build UPDATE query
+                    const setClause = Object.entries(updates)
+                      .map(([key, _], index) => `${key} = $${index + 2}`)
+                      .join(', ');
+                    const values = [value, ...Object.values(updates)];
+                    const query = `UPDATE ${tableName} SET ${setClause} WHERE ${column} = $1 RETURNING *`;
+                    const result = await client.query(query, values);
+                    return result.rows;
+                  }
+                };
+              }
+            };
+          },
+          // Cleanup method
+          destroy: async () => {
+            if (client) {
+              await client.release();
+              this.logger.debug('Released database client in destroy method');
+            }
+          }
+        };
       } catch (rawQueryError) {
         this.logger.error('Basic client query test failed', {
           error: rawQueryError.message,
@@ -638,38 +679,6 @@ class SubscriptionProcessor {
         });
         throw rawQueryError;
       }
-      
-      // Create a knex instance with the client
-      const knex = require('knex')({
-        client: 'pg',
-        connection: () => Promise.resolve(client)
-      });
-      
-      // Store client reference for cleanup in finally block
-      knex.client = client;
-      
-      // Test the connection to ensure it's working
-      try {
-        const result = await knex.raw('SELECT 1 as test');
-        this.logger.debug('Database connection test successful', {
-          test_result: result.rows[0]
-        });
-      } catch (testError) {
-        this.logger.error('Database connection test failed', {
-          error: testError.message,
-          code: testError.code,
-          stack: testError.stack
-        });
-        
-        // Don't release the client here, let the finally block handle it
-        throw testError;
-      }
-      
-      this.logger.debug('Database connection established successfully');
-      
-      // Let knex take over the client lifecycle
-      client = null;
-      return knex;
     } catch (error) {
       this.logger.error('Failed to connect to database', {
         error: error.message,
@@ -684,8 +693,8 @@ class SubscriptionProcessor {
       });
       throw new Error(`Database connection failed: ${error.message}`);
     } finally {
-      // Clean up the client if it wasn't assigned to knex
-      if (client) {
+      // Clean up the client if it wasn't assigned to our wrapper
+      if (client && !client._assigned) {
         try {
           client.release();
           this.logger.debug('Released database client in finally block');
