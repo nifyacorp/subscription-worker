@@ -18,6 +18,8 @@ steps:
       - '--platform'
       - 'managed'
       - '--allow-unauthenticated'
+      - '--set-env-vars'
+      - 'PARSER_BASE_URL=https://boe-parser-415554190254.us-central1.run.app'
 
 images:
   - 'gcr.io/$PROJECT_ID/subscription-processor'

@@ -7,6 +7,7 @@
     "dev": "nodemon src/index.js"
   },
   "dependencies": {
+    "@google-cloud/pubsub": "^4.0.0",
     "@google-cloud/secret-manager": "^5.0.0",
     "axios": "^1.8.1",
     "dotenv": "^16.4.7",
