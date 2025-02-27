@@ -16,6 +16,7 @@ if (!isDevelopment) {
 // Topic names (will be loaded from environment or secrets)
 let emailImmediateTopic;
 let emailDailyTopic;
+let notificationTopic;
 
 /**
  * Initialize PubSub configuration by loading topic names from secrets
@@ -31,6 +32,15 @@ const initializePubSub = async () => {
       projectId: process.env.PROJECT_ID,
     });
     
+    // Get notification topic name from environment or use default
+    const notificationTopicName = process.env.NOTIFICATION_TOPIC_NAME || 'boe-analysis-notifications';
+    notificationTopic = pubSubClient.topic(notificationTopicName);
+    
+    logger.info('PubSub client initialized with notification topic', {
+      mode: process.env.NODE_ENV || 'development',
+      notification_topic: notificationTopicName
+    });
+    
     // Skip trying to access the email topics for now
     /*
     // Original code:
@@ -41,13 +51,9 @@ const initializePubSub = async () => {
     const emailDailyTopic = pubSubClient.topic(emailDailyTopicName);
     */
     
-    // Return a simpler configuration that doesn't need the topics
-    logger.info('PubSub client initialized without email notification topics', {
-      mode: process.env.NODE_ENV || 'development'
-    });
-    
     return {
       pubSubClient,
+      notificationTopic,
       // Not providing the email topics for now
       emailImmediateTopic: null,
       emailDailyTopic: null
@@ -60,6 +66,157 @@ const initializePubSub = async () => {
     throw error;
   }
 };
+
+/**
+ * Publish notification messages to the notification-worker service
+ * This replaces the previous flow where the BOE Parser would publish directly
+ * 
+ * @param {Object} subscription - The subscription data 
+ * @param {Array} matches - The matches found by the BOE parser
+ * @param {string} processorType - The type of processor (e.g., 'boe')
+ * @returns {Promise<string>} Message ID
+ */
+async function publishNotificationMessage(subscription, matches, processorType = 'boe') {
+  if (!notificationTopic && !isDevelopment) {
+    logger.error('Notification topic not initialized');
+    throw new Error('Notification topic not initialized. Call initializePubSub first.');
+  }
+  
+  const subscriptionId = subscription.subscription_id || subscription.id;
+  const userId = subscription.user_id;
+  
+  // Format the notification message similar to how the BOE parser would have done it
+  const message = {
+    version: '1.0',
+    processor_type: processorType,
+    timestamp: new Date().toISOString(),
+    trace_id: generateTraceId(),
+    request: {
+      subscription_id: subscriptionId,
+      processing_id: generateProcessingId(),
+      user_id: userId,
+      prompts: subscription.prompts || []
+    },
+    results: {
+      query_date: new Date().toISOString().split('T')[0],
+      matches: formatMatches(matches, subscription)
+    },
+    metadata: {
+      processing_time_ms: 0, // We don't track this directly
+      total_matches: matches.length,
+      status: 'success',
+      error: null
+    }
+  };
+  
+  // Log the notification message
+  logger.debug('Publishing notification message', {
+    trace_id: message.trace_id,
+    subscription_id: subscriptionId,
+    user_id: userId,
+    total_matches: matches.length
+  });
+  
+  // In development mode, just log the message instead of publishing
+  if (isDevelopment) {
+    const mockMessageId = `dev-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+    logger.info({
+      messageId: mockMessageId,
+      subscription_id: subscriptionId,
+      total_matches: matches.length,
+      mode: 'development'
+    }, 'Development mode: Would have published notification message');
+    
+    // Log the first match for debugging
+    if (matches.length > 0) {
+      logger.debug('First match sample', {
+        match: JSON.stringify(matches[0]).substring(0, 500)
+      });
+    }
+    
+    return mockMessageId;
+  }
+  
+  try {
+    const dataBuffer = Buffer.from(JSON.stringify(message));
+    const messageId = await pubsub.topic(notificationTopic).publish(dataBuffer);
+    
+    logger.info({
+      messageId,
+      subscription_id: subscriptionId,
+      total_matches: matches.length
+    }, 'Published notification message to PubSub');
+    
+    return messageId;
+  } catch (error) {
+    logger.error({
+      error: error.message,
+      stack: error.stack,
+      subscription_id: subscriptionId,
+      total_matches: matches.length
+    }, 'Failed to publish notification message to PubSub');
+    
+    throw error;
+  }
+}
+
+/**
+ * Format matches into the expected structure for the notification worker
+ * @param {Array} matches - The matches from the BOE parser
+ * @param {Object} subscription - The subscription data
+ * @returns {Array} Formatted matches
+ */
+function formatMatches(matches, subscription) {
+  if (!matches || !Array.isArray(matches)) {
+    return [];
+  }
+  
+  // Group matches by prompt
+  const matchesByPrompt = {};
+  
+  matches.forEach(match => {
+    const prompt = match.prompt || 'default';
+    if (!matchesByPrompt[prompt]) {
+      matchesByPrompt[prompt] = [];
+    }
+    
+    matchesByPrompt[prompt].push({
+      document_type: 'boe_document',
+      title: match.title || 'Unknown title',
+      summary: match.summary || match.content || 'No summary available',
+      relevance_score: match.relevance_score || 0.5,
+      links: {
+        html: match.links?.html || match.source_url || '',
+        pdf: match.links?.pdf || ''
+      },
+      publication_date: match.publication_date || match.dates?.publication_date || new Date().toISOString(),
+      section: match.section || '',
+      bulletin_type: match.document_type || match.bulletin_type || 'OTHER'
+    });
+  });
+  
+  // Convert to expected array format
+  return Object.entries(matchesByPrompt).map(([prompt, documents]) => ({
+    prompt,
+    documents
+  }));
+}
+
+/**
+ * Generate a unique trace ID
+ * @returns {string} Trace ID
+ */
+function generateTraceId() {
+  return `trace-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`;
+}
+
+/**
+ * Generate a unique processing ID
+ * @returns {string} Processing ID
+ */
+function generateProcessingId() {
+  return `proc-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`;
+}
 
 /**
  * Publish a notification to the email service
@@ -129,5 +286,6 @@ async function publishEmailNotification(notification, user, subscription, freque
 
 module.exports = {
   initializePubSub,
-  publishEmailNotification
+  publishEmailNotification,
+  publishNotificationMessage
 }; 

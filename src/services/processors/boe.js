@@ -308,6 +308,9 @@ class BOEProcessor extends BaseProcessor {
         return { entries: [], status: 'empty_response' };
       }
       
+      // IMPORTANT: We're no longer publishing to PubSub here
+      // That responsibility has been moved to the Subscription Worker
+      
       // Transform the response format to match what the subscription processor expects
       if (response.data.results) {
         // Extract all matches from all results

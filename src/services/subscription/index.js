@@ -4,6 +4,7 @@ const DatabaseService = require('./database');
 const NotificationService = require('./notification');
 const ProcessingService = require('./processing');
 const BOEProcessor = require('../processors/boe');
+const { publishNotificationMessage } = require('../../config/pubsub');
 
 const logger = getLogger('subscription-processor');
 
@@ -318,6 +319,48 @@ class SubscriptionProcessor {
             subscription_id: subscriptionId,
             processing_id: result.processing_id
           };
+        }
+        
+        // NEW STEP: Publish notification message directly to Pub/Sub
+        // Instead of relying on the BOE parser to publish
+        if (result && (result.matches?.length > 0 || result.entries?.length > 0)) {
+          const matches = result.matches || result.entries || [];
+          
+          if (matches.length > 0) {
+            logger.info('Publishing notification message for matches', {
+              subscription_id: subscriptionId,
+              matches_count: matches.length
+            });
+            
+            try {
+              // Determine processor type from subscription
+              const processorType = subscription.type_slug || 'boe';
+              
+              // Forward the complete subscription data along with matches
+              const messageId = await publishNotificationMessage(
+                subscriptionData, 
+                matches, 
+                processorType
+              );
+              
+              logger.info('Successfully published notification message', {
+                subscription_id: subscriptionId,
+                message_id: messageId,
+                matches_count: matches.length
+              });
+            } catch (pubsubError) {
+              logger.error('Failed to publish notification message', {
+                subscription_id: subscriptionId,
+                error: pubsubError.message,
+                stack: pubsubError.stack
+              });
+              // We continue processing despite the error
+            }
+          } else {
+            logger.info('No matches to publish notifications for', {
+              subscription_id: subscriptionId
+            });
+          }
         }
         
         // Update the processing record to completed status
