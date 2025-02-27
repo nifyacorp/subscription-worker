@@ -41,8 +41,10 @@ class BOEProcessor extends BaseProcessor {
       }
     });
 
+    // Configuration for retry mechanism
     this.maxRetries = 3;
-    this.retryDelay = 1000; // 1 second between retries
+    this.initialRetryDelay = 1000; // 1 second initial delay
+    this.maxRetryDelay = 20000; // Maximum 20 seconds between retries
 
     // Add request interceptor for logging
     this.client.interceptors.request.use((config) => {
@@ -237,7 +239,7 @@ class BOEProcessor extends BaseProcessor {
   }
   
   /**
-   * Analyze BOE content based on provided prompts
+   * Analyze BOE content based on provided prompts with retry mechanism
    * @param {Array<string>} prompts - The search prompts
    * @param {string} subscriptionId - The subscription ID
    * @param {string} userId - The user ID
@@ -270,111 +272,175 @@ class BOEProcessor extends BaseProcessor {
       user_id: safeUserId 
     });
     
-    try {
-      const requestBody = {
-        texts: prompts, // Using 'texts' as the key as expected by the BOE parser
-        metadata: {
-          user_id: safeUserId,
-          subscription_id: safeSubscriptionId,
-        },
-        limit: 5,
-        date: new Date().toISOString().split('T')[0]
-      };
-      
-      this.logger.debug('Sending request to BOE API', {
-        endpoint: '/analyze-text',
-        body_preview: JSON.stringify(requestBody).substring(0, 200),
-        api_key_present: !!this.apiKey,
-        api_url: this.apiUrl,
-        client_configured: !!this.client
-      });
-      
-      const response = await this.client.post('/analyze-text', requestBody);
-      
-      this.logger.debug('Received response from BOE API', {
-        status: response.status,
-        data_size: JSON.stringify(response.data).length,
-        results_count: response.data?.results?.length || 0,
-        response_success: !!response.data,
-        data_preview: JSON.stringify(response.data).substring(0, 200) + '...'
-      });
-      
-      // Ensure we return a standard format even if the response is unexpected
-      if (!response.data) {
-        this.logger.warn('Empty response from BOE API', {
-          subscription_id: safeSubscriptionId,
-          status_code: response.status
-        });
-        return { entries: [], status: 'empty_response' };
-      }
-      
-      // IMPORTANT: We're no longer publishing to PubSub here
-      // That responsibility has been moved to the Subscription Worker
-      
-      // Transform the response format to match what the subscription processor expects
-      if (response.data.results) {
-        // Extract all matches from all results
-        const entries = [];
+    // Prepare the request body once outside the retry loop
+    const requestBody = {
+      texts: prompts, // Using 'texts' as the key as expected by the BOE parser
+      metadata: {
+        user_id: safeUserId,
+        subscription_id: safeSubscriptionId,
+      },
+      limit: 5,
+      date: new Date().toISOString().split('T')[0]
+    };
+    
+    // Implementation of exponential backoff retry logic
+    let retries = 0;
+    let lastError = null;
+    let timeoutFactor = 1.0; // Start with normal timeout
+    
+    while (retries <= this.maxRetries) {
+      try {
+        // Adjust timeout for retries to give more time
+        const currentTimeout = Math.min(
+          this.client.defaults.timeout * timeoutFactor, 
+          240000 // Max 4 minutes
+        );
         
-        // Each result corresponds to one prompt
-        response.data.results.forEach((result, index) => {
-          const currentPrompt = prompts[index] || 'unknown';
+        this.logger.debug('Sending request to BOE API (attempt ' + (retries + 1) + ')', {
+          endpoint: '/analyze-text',
+          timeout_ms: currentTimeout,
+          body_preview: JSON.stringify(requestBody).substring(0, 200),
+          api_key_present: !!this.apiKey,
+          api_url: this.apiUrl,
+          retry_count: retries
+        });
+        
+        // Clone the default axios config and adjust timeout for this request
+        const requestConfig = {
+          timeout: currentTimeout
+        };
+        
+        // Send the request with adjusted timeout
+        const response = await this.client.post('/analyze-text', requestBody, requestConfig);
+        
+        this.logger.debug('Received response from BOE API', {
+          status: response.status,
+          data_size: JSON.stringify(response.data).length,
+          results_count: response.data?.results?.length || 0,
+          response_success: !!response.data,
+          data_preview: JSON.stringify(response.data).substring(0, 200) + '...',
+          attempt: retries + 1
+        });
+        
+        // Ensure we return a standard format even if the response is unexpected
+        if (!response.data) {
+          this.logger.warn('Empty response from BOE API', {
+            subscription_id: safeSubscriptionId,
+            status_code: response.status
+          });
+          return { entries: [], status: 'empty_response' };
+        }
+        
+        // Transform the response format to match what the subscription processor expects
+        if (response.data.results) {
+          // Extract all matches from all results
+          const entries = [];
           
-          if (result.matches && Array.isArray(result.matches)) {
-            // Add the prompt to each match for tracking
-            const matchesWithPrompt = result.matches.map(match => ({
-              ...match,
-              prompt: currentPrompt
-            }));
-            entries.push(...matchesWithPrompt);
+          // Each result corresponds to one prompt
+          response.data.results.forEach((result, index) => {
+            const currentPrompt = prompts[index] || 'unknown';
             
-            this.logger.debug('Processed matches for prompt', {
-              prompt: currentPrompt,
-              matches_count: result.matches.length
-            });
-          } else {
-            this.logger.warn('No matches for prompt', {
-              prompt: currentPrompt,
-              result_keys: Object.keys(result)
+            if (result.matches && Array.isArray(result.matches)) {
+              // Add the prompt to each match for tracking
+              const matchesWithPrompt = result.matches.map(match => ({
+                ...match,
+                prompt: currentPrompt
+              }));
+              entries.push(...matchesWithPrompt);
+              
+              this.logger.debug('Processed matches for prompt', {
+                prompt: currentPrompt,
+                matches_count: result.matches.length
+              });
+            } else {
+              this.logger.warn('No matches for prompt', {
+                prompt: currentPrompt,
+                result_keys: Object.keys(result)
+              });
+            }
+          });
+          
+          if (entries.length === 0) {
+            this.logger.info('No matches found in any results', {
+              subscription_id: safeSubscriptionId,
+              prompt_count: prompts.length
             });
           }
+          
+          return { 
+            entries,
+            status: 'success',
+            query_date: response.data.query_date,
+            boe_info: response.data.boe_info
+          };
+        }
+        
+        return response.data;
+      } catch (error) {
+        lastError = error;
+        retries++;
+        
+        // Determine if this error is retryable
+        const isTimeout = error.code === 'ECONNABORTED' || 
+                          error.message.includes('timeout') ||
+                          error.response?.status === 504; // Gateway Timeout
+                          
+        const isServerError = error.response?.status >= 500 && error.response?.status < 600;
+        const isRetryable = isTimeout || isServerError;
+        
+        if (!isRetryable || retries > this.maxRetries) {
+          // Non-retryable error or max retries reached
+          this.logger.error('Error analyzing BOE content (non-retryable or max retries reached)', {
+            error: error.message,
+            status: error.response?.status,
+            data: error.response?.data ? JSON.stringify(error.response.data).substring(0, 200) : 'No response data',
+            request: {
+              url: error.config?.url,
+              method: error.config?.method,
+              data: error.config?.data ? JSON.stringify(error.config.data).substring(0, 200) : 'No request data'
+            },
+            retry_count: retries,
+            is_retryable: isRetryable
+          });
+          break;
+        }
+        
+        // Calculate delay with exponential backoff
+        const delay = Math.min(
+          this.initialRetryDelay * Math.pow(2, retries - 1) + Math.random() * 1000,
+          this.maxRetryDelay
+        );
+        
+        // Increase timeout for next attempt
+        timeoutFactor = 1.5 * Math.pow(1.5, retries - 1); // 1.5x, 2.25x, 3.375x original timeout
+        
+        this.logger.warn(`Retryable error, attempt ${retries}/${this.maxRetries}. Retrying in ${Math.round(delay)}ms`, {
+          error: error.message,
+          error_code: error.code,
+          status: error.response?.status,
+          subscription_id: safeSubscriptionId,
+          next_timeout_factor: timeoutFactor
         });
         
-        if (entries.length === 0) {
-          this.logger.info('No matches found in any results', {
-            subscription_id: safeSubscriptionId,
-            prompt_count: prompts.length
-          });
-        }
-        
-        return { 
-          entries,
-          status: 'success',
-          query_date: response.data.query_date,
-          boe_info: response.data.boe_info
-        };
+        // Wait before retrying
+        await new Promise(resolve => setTimeout(resolve, delay));
       }
-      
-      return response.data;
-    } catch (error) {
-      this.logger.error('Error analyzing BOE content', {
-        error: error.message,
-        status: error.response?.status,
-        data: error.response?.data ? JSON.stringify(error.response.data).substring(0, 200) : 'No response data',
-        request: {
-          url: error.config?.url,
-          method: error.config?.method,
-          data: error.config?.data ? JSON.stringify(error.config.data).substring(0, 200) : 'No request data'
-        }
-      });
-      
-      return { 
-        entries: [],
-        status: 'error',
-        error: error.message,
-        timestamp: new Date().toISOString()
-      };
     }
+    
+    // If we get here, all retries failed
+    this.logger.error('All retry attempts failed for BOE analysis', {
+      error: lastError?.message,
+      status: lastError?.response?.status,
+      retry_count: retries,
+      subscription_id: safeSubscriptionId
+    });
+    
+    return { 
+      entries: [],
+      status: 'error',
+      error: lastError?.message || 'Max retry attempts reached',
+      timestamp: new Date().toISOString()
+    };
   }
 }
 

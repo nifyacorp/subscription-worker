@@ -17,6 +17,7 @@ if (!isDevelopment) {
 let emailImmediateTopic;
 let emailDailyTopic;
 let notificationTopic;
+let dlqTopic;
 
 /**
  * Initialize PubSub configuration by loading topic names from secrets
@@ -32,13 +33,17 @@ const initializePubSub = async () => {
       projectId: process.env.PROJECT_ID,
     });
     
-    // Get notification topic name from environment or use default
-    const notificationTopicName = process.env.NOTIFICATION_TOPIC_NAME || 'boe-analysis-notifications';
-    notificationTopic = pubSubClient.topic(notificationTopicName);
+    // Get topic names from environment variables with fallbacks to defaults
+    const notificationTopicName = process.env.PUBSUB_TOPIC_NAME || 'processor-results';
+    const dlqTopicName = process.env.PUBSUB_DLQ_TOPIC_NAME || 'processor-results-dlq';
     
-    logger.info('PubSub client initialized with notification topic', {
+    notificationTopic = pubSubClient.topic(notificationTopicName);
+    dlqTopic = pubSubClient.topic(dlqTopicName);
+    
+    logger.info('PubSub client initialized with topics', {
       mode: process.env.NODE_ENV || 'development',
-      notification_topic: notificationTopicName
+      notification_topic: notificationTopicName,
+      dlq_topic: dlqTopicName
     });
     
     // Skip trying to access the email topics for now
@@ -54,6 +59,7 @@ const initializePubSub = async () => {
     return {
       pubSubClient,
       notificationTopic,
+      dlqTopic,
       // Not providing the email topics for now
       emailImmediateTopic: null,
       emailDailyTopic: null
@@ -114,7 +120,8 @@ async function publishNotificationMessage(subscription, matches, processorType =
     trace_id: message.trace_id,
     subscription_id: subscriptionId,
     user_id: userId,
-    total_matches: matches.length
+    total_matches: matches.length,
+    topic_name: process.env.PUBSUB_TOPIC_NAME || 'processor-results'
   });
   
   // In development mode, just log the message instead of publishing
@@ -124,7 +131,8 @@ async function publishNotificationMessage(subscription, matches, processorType =
       messageId: mockMessageId,
       subscription_id: subscriptionId,
       total_matches: matches.length,
-      mode: 'development'
+      mode: 'development',
+      topic: process.env.PUBSUB_TOPIC_NAME || 'processor-results'
     }, 'Development mode: Would have published notification message');
     
     // Log the first match for debugging
@@ -139,12 +147,15 @@ async function publishNotificationMessage(subscription, matches, processorType =
   
   try {
     const dataBuffer = Buffer.from(JSON.stringify(message));
-    const messageId = await pubsub.topic(notificationTopic).publish(dataBuffer);
+    
+    // Use the notificationTopic that was initialized during startup
+    const messageId = await notificationTopic.publish(dataBuffer);
     
     logger.info({
       messageId,
       subscription_id: subscriptionId,
-      total_matches: matches.length
+      total_matches: matches.length,
+      topic: process.env.PUBSUB_TOPIC_NAME || 'processor-results'
     }, 'Published notification message to PubSub');
     
     return messageId;
@@ -153,8 +164,41 @@ async function publishNotificationMessage(subscription, matches, processorType =
       error: error.message,
       stack: error.stack,
       subscription_id: subscriptionId,
-      total_matches: matches.length
+      total_matches: matches.length,
+      topic: process.env.PUBSUB_TOPIC_NAME || 'processor-results'
     }, 'Failed to publish notification message to PubSub');
+    
+    // Attempt to publish to DLQ if available
+    if (dlqTopic && !isDevelopment) {
+      try {
+        // Add error information to the message
+        const dlqMessage = {
+          ...message,
+          metadata: {
+            ...message.metadata,
+            error: error.message,
+            original_topic: process.env.PUBSUB_TOPIC_NAME || 'processor-results',
+            timestamp_error: new Date().toISOString(),
+            status: 'error'
+          }
+        };
+        
+        const dlqBuffer = Buffer.from(JSON.stringify(dlqMessage));
+        const dlqMessageId = await dlqTopic.publish(dlqBuffer);
+        
+        logger.info({
+          dlqMessageId,
+          subscription_id: subscriptionId,
+          error: error.message
+        }, 'Published failed message to DLQ');
+      } catch (dlqError) {
+        logger.error({
+          error: dlqError.message,
+          original_error: error.message,
+          subscription_id: subscriptionId
+        }, 'Failed to publish to DLQ');
+      }
+    }
     
     throw error;
   }
