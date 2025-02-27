@@ -129,64 +129,68 @@ class BOEProcessor extends BaseProcessor {
       has_text_metadata: subscription.metadata && Array.isArray(subscription.metadata.texts),
       metadata_keys: subscription.metadata ? Object.keys(subscription.metadata) : []
     });
+
+    // Add VERY detailed logging about the subscription object
+    this.logger.debug('Complete subscription object contents', {
+      subscription_id: subscription_id || 'unknown',
+      subscription_type: typeof subscription,
+      subscription_properties: Object.getOwnPropertyNames(subscription),
+      prompts_field: subscription.prompts,
+      prompts_field_type: typeof subscription.prompts,
+      is_prompts_array: Array.isArray(subscription.prompts),
+      subscription_json: JSON.stringify(subscription).substring(0, 500) + '...',
+      constructor_name: subscription.constructor ? subscription.constructor.name : 'unknown'
+    });
     
-    // Check different possible locations for the prompts
-    if (Array.isArray(subscription.prompts)) {
-      // Direct prompts array
+    // Check for prompts in various locations
+    if (Array.isArray(subscription.prompts) && subscription.prompts.length > 0) {
+      this.logger.debug('Found prompts directly in subscription.prompts', {
+        prompts: subscription.prompts
+      });
       prompts = subscription.prompts;
-      this.logger.debug('Found prompts directly in subscription', { 
-        prompt_count: prompts.length,
-        first_prompt: prompts.length > 0 ? prompts[0] : null
-      });
-    } else if (subscription.metadata && Array.isArray(subscription.metadata.prompts)) {
-      // Prompts in metadata
-      prompts = subscription.metadata.prompts;
-      this.logger.debug('Found prompts in subscription metadata', { 
-        prompt_count: prompts.length,
-        first_prompt: prompts.length > 0 ? prompts[0] : null
-      });
-    } else if (Array.isArray(subscription.texts)) {
-      // Direct texts array (alternative name)
-      prompts = subscription.texts;
-      this.logger.debug('Found texts directly in subscription', { 
-        prompt_count: prompts.length,
-        first_prompt: prompts.length > 0 ? prompts[0] : null 
-      });
-    } else if (subscription.metadata && Array.isArray(subscription.metadata.texts)) {
-      // Texts in metadata (alternative name)
-      prompts = subscription.metadata.texts;
-      this.logger.debug('Found texts in subscription metadata', { 
-        prompt_count: prompts.length,
-        first_prompt: prompts.length > 0 ? prompts[0] : null
-      });
-    }
-    
-    // If no prompts found, check other potential locations or use default
-    if (prompts.length === 0) {
-      if (typeof subscription.prompt === 'string') {
-        // Single prompt as string
-        prompts = [subscription.prompt];
-        this.logger.debug('Found single prompt string in subscription', { prompt: subscription.prompt });
-      } else if (subscription.metadata && typeof subscription.metadata.prompt === 'string') {
-        // Single prompt in metadata
-        prompts = [subscription.metadata.prompt];
-        this.logger.debug('Found single prompt string in subscription metadata', { prompt: subscription.metadata.prompt });
-      } else if (typeof subscription.text === 'string') {
-        // Single text as string (alternative name)
-        prompts = [subscription.text];
-        this.logger.debug('Found single text string in subscription', { text: subscription.text });
-      } else if (subscription.metadata && typeof subscription.metadata.text === 'string') {
-        // Single text in metadata (alternative name)
-        prompts = [subscription.metadata.text];
-        this.logger.debug('Found single text string in subscription metadata', { text: subscription.metadata.text });
-      } else {
-        // Use default prompt if none found
-        prompts = ['Información general del BOE'];
-        this.logger.warn('No prompts found in subscription data, using default', {
-          subscription_id: subscription_id || 'unknown',
-          default_prompt: prompts[0]
+    } else if (typeof subscription.prompts === 'string') {
+      // Handle case where prompts might be a string representation of an array
+      try {
+        const parsedPrompts = JSON.parse(subscription.prompts);
+        if (Array.isArray(parsedPrompts) && parsedPrompts.length > 0) {
+          this.logger.debug('Found prompts in string format, parsed to array', {
+            prompts: parsedPrompts
+          });
+          prompts = parsedPrompts;
+        } else {
+          // If it's a string but not an array, use it as a single prompt
+          this.logger.debug('Found prompts as a single string', {
+            prompt: subscription.prompts
+          });
+          prompts = [subscription.prompts];
+        }
+      } catch (error) {
+        // If it's not valid JSON, use it as a single prompt
+        this.logger.debug('Found prompts as non-JSON string, using as single prompt', {
+          prompt: subscription.prompts
         });
+        prompts = [subscription.prompts];
       }
+    } else if (subscription.metadata && Array.isArray(subscription.metadata.prompts) && subscription.metadata.prompts.length > 0) {
+      this.logger.debug('Found prompts in subscription.metadata.prompts', {
+        prompts: subscription.metadata.prompts
+      });
+      prompts = subscription.metadata.prompts;
+    } else if (Array.isArray(subscription.texts) && subscription.texts.length > 0) {
+      this.logger.debug('Found prompts in subscription.texts', {
+        prompts: subscription.texts
+      });
+      prompts = subscription.texts;
+    } else if (subscription.metadata && Array.isArray(subscription.metadata.texts) && subscription.metadata.texts.length > 0) {
+      this.logger.debug('Found prompts in subscription.metadata.texts', {
+        prompts: subscription.metadata.texts
+      });
+      prompts = subscription.metadata.texts;
+    } else {
+      this.logger.warn('No prompts found in subscription data, using default', {
+        subscription_id: subscription_id || 'unknown'
+      });
+      prompts = ['Información general del BOE'];
     }
     
     try {

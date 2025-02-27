@@ -146,9 +146,28 @@ class SubscriptionProcessor {
     }
 
     try {
-      // Query for the subscription
+      // Query for the subscription with type information
+      const sqlQuery = `
+        SELECT 
+          s.*,
+          t.name as type_name,
+          t.id as type_id
+        FROM 
+          subscriptions s
+        LEFT JOIN 
+          subscription_types t ON s.type_id = t.id
+        WHERE 
+          s.id = $1 
+        LIMIT 1
+      `;
+      
+      logger.debug('Executing subscription query with type info', { 
+        subscription_id: subscriptionId,
+        sql_query: sqlQuery
+      });
+      
       const subscriptionQueryResult = await knex.query(
-        'SELECT * FROM subscriptions WHERE id = $1 LIMIT 1', 
+        sqlQuery, 
         [subscriptionId]
       );
       
@@ -173,6 +192,20 @@ class SubscriptionProcessor {
         // We'll still process it, but log a warning
       }
 
+      // Add detailed logging to see exactly what fields are available in the subscription
+      logger.debug('Full subscription data from database', {
+        subscription_id: subscriptionId,
+        subscription_keys: Object.keys(subscription),
+        prompts_exists: 'prompts' in subscription,
+        prompts_type: subscription.prompts ? typeof subscription.prompts : 'undefined',
+        prompts_value: subscription.prompts,
+        prompts_array: Array.isArray(subscription.prompts) ? subscription.prompts : null,
+        metadata_exists: 'metadata' in subscription,
+        metadata_content: subscription.metadata,
+        type_id: subscription.type_id,
+        type_slug: subscription.type_slug
+      });
+
       logger.debug('Found subscription', {
         subscription_id: subscriptionId,
         type_slug: subscription.type_slug,
@@ -188,38 +221,25 @@ class SubscriptionProcessor {
         metadata: subscription.metadata || {}
       };
 
-      // Extract prompts from metadata if present
-      if (subscription.metadata) {
-        try {
-          // If metadata is a string, try to parse it
-          if (typeof subscription.metadata === 'string') {
-            try {
-              subscriptionData.metadata = JSON.parse(subscription.metadata);
-            } catch (parseError) {
-              logger.warn('Failed to parse metadata as JSON', {
-                subscription_id: subscriptionId,
-                error: parseError.message,
-                metadata: subscription.metadata.substring(0, 100)
-              });
-              // Continue with the original metadata as string
-            }
-          }
-          
-          // Add prompts directly to the subscription data for easier access by processors
-          if (subscriptionData.metadata && subscriptionData.metadata.prompts) {
-            subscriptionData.prompts = subscriptionData.metadata.prompts;
-            logger.debug('Extracted prompts from metadata', {
-              subscription_id: subscriptionId,
-              prompt_count: Array.isArray(subscriptionData.prompts) ? subscriptionData.prompts.length : 'not an array'
-            });
-          }
-        } catch (metadataError) {
-          logger.error('Error processing subscription metadata', {
+      // Ensure prompts are included in the subscription data
+      if (Array.isArray(subscription.prompts)) {
+        subscriptionData.prompts = subscription.prompts;
+        logger.debug('Added prompts to subscription data', {
+          subscription_id: subscriptionId,
+          prompts: subscription.prompts
+        });
+      } else {
+        logger.warn('No prompts array found in subscription, checking other fields', {
+          subscription_id: subscriptionId
+        });
+        
+        // Try to find prompts information in other fields
+        if (subscription.metadata && subscription.metadata.prompts) {
+          subscriptionData.prompts = subscription.metadata.prompts;
+          logger.debug('Added prompts from metadata to subscription data', {
             subscription_id: subscriptionId,
-            error: metadataError.message
+            prompts: subscription.metadata.prompts
           });
-          // Continue with empty metadata rather than failing
-          subscriptionData.metadata = {};
         }
       }
 
