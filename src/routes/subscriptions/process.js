@@ -345,35 +345,67 @@ function createProcessRouter(subscriptionProcessor) {
       logger.info('Processing subscription', { subscription_id: id });
       
       try {
-        const result = await subscriptionProcessor.processSubscription(id);
+        // First, create or update a processing record in the database to mark this subscription as queued
+        const processingId = await createProcessingRecord(subscriptionProcessor.pool, id);
         
-        // Handle processor error responses
-        if (result && result.status === 'error') {
-          logger.warn('Processor returned error status', {
-            subscription_id: id,
-            error_message: result.error || 'Unknown error',
-            result: JSON.stringify(result).substring(0, 200)
-          });
-          return res.status(400).json({
-            status: 'error',
-            error: result.error || 'Error processing subscription',
-            message: 'The subscription could not be processed due to an error',
-            subscription_id: id
-          });
-        }
-        
-        // Return successful response
-        logger.info('Subscription queued for processing', { 
+        // Return response to client immediately with 202 Accepted status
+        logger.info('Subscription queued for processing, returning 202 Accepted', { 
           subscription_id: id,
-          result: result 
+          processing_id: processingId
         });
         
-        return res.status(202).json({
+        // Send immediate response to client
+        res.status(202).json({
           status: 'success',
           message: 'Subscription queued for processing',
-          processing_id: result.processing_id || 'unknown',
+          processing_id: processingId,
           subscription_id: id
         });
+        
+        // Process the subscription asynchronously after sending the response
+        setImmediate(async () => {
+          try {
+            // Now process the subscription
+            logger.info('Starting async processing of subscription', { 
+              subscription_id: id,
+              processing_id: processingId
+            });
+            
+            const result = await subscriptionProcessor.processSubscription(id);
+            
+            logger.info('Async processing completed successfully', {
+              subscription_id: id,
+              processing_id: processingId,
+              result_status: result?.status || 'unknown'
+            });
+          } catch (asyncError) {
+            logger.error('Error in async subscription processing', {
+              subscription_id: id,
+              processing_id: processingId,
+              error: asyncError.message,
+              stack: asyncError.stack
+            });
+            
+            // Update the processing record to indicate an error occurred
+            try {
+              await updateProcessingStatus(
+                subscriptionProcessor.pool,
+                processingId,
+                'error',
+                { error: asyncError.message }
+              );
+            } catch (updateError) {
+              logger.error('Failed to update processing status after error', {
+                subscription_id: id,
+                processing_id: processingId,
+                error: updateError.message
+              });
+            }
+          }
+        });
+        
+        // Since we've already sent the response, we need to return here to prevent further response attempts
+        return;
       } catch (processorError) {
         logger.error('Error in subscription processor', {
           subscription_id: id,
@@ -560,6 +592,44 @@ function createProcessRouter(subscriptionProcessor) {
   });
 
   return router;
+}
+
+async function createProcessingRecord(pool, subscriptionId) {
+  if (!pool) {
+    throw new Error('Database pool is required');
+  }
+  
+  let client;
+  try {
+    client = await pool.connect();
+    
+    // Create a new processing record
+    const result = await client.query(
+      `INSERT INTO subscription_processing
+       (subscription_id, status, metadata)
+       VALUES ($1, $2, $3)
+       RETURNING id`,
+      [
+        subscriptionId,
+        'pending', // Initial status
+        JSON.stringify({
+          queued_at: new Date().toISOString()
+        })
+      ]
+    );
+    
+    if (result.rowCount === 0) {
+      throw new Error('Failed to create processing record');
+    }
+    
+    return result.rows[0].id;
+  } catch (error) {
+    throw error;
+  } finally {
+    if (client) {
+      client.release();
+    }
+  }
 }
 
 module.exports = createProcessRouter;
