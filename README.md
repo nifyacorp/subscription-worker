@@ -1,351 +1,234 @@
 # Subscription Processor Service
 
-A Node.js microservice that processes BOE (Boletín Oficial del Estado) subscriptions using Cloud Run and Cloud SQL.
+## Overview
+The Subscription Processor is a Node.js microservice responsible for processing user subscriptions, matching them against various data sources (primarily BOE documents), and generating notifications. It runs on Google Cloud Run, uses Cloud SQL for data storage, and integrates with PubSub for message-based communication with other services.
 
-## Repository Structure.
+The service now includes functionality to dispatch notifications to the email notification system based on user preferences, allowing for both immediate and daily digest emails.
+
+## Repository Structure
 
 ```
-.
-├── src/
-│   ├── config/           # Configuration modules
-│   │   ├── database.js   # Database connection and pool management
-│   │   ├── logger.js     # Pino logger configuration
-│   │   ├── pubsub.js     # Google Cloud Pub/Sub configuration
-│   │   └── secrets.js    # Google Cloud Secret Manager integration
-│   ├── controllers/      # Business logic controllers
-│   │   └── boe-parser/   # BOE document parsing controller
-│   ├── routes/          # Express route handlers
-│   │   ├── health.js    # Health check endpoint
-│   │   └── subscriptions.js # Subscription-related endpoints
-│   ├── services/        # Core business services
-│   │   ├── processors/  # Content processors
-│   │   │   ├── base.js  # Base processor class
-│   │   │   ├── boe.js   # BOE-specific processor
+subscription-worker/
+├── .bolt/                  # Bolt runtime configuration
+├── src/                    # Source code
+│   ├── config/             # Configuration files
+│   │   ├── database.js     # Database connection setup
+│   │   ├── logger.js       # Pino logger configuration
+│   │   ├── pubsub.js       # PubSub client and topic management
+│   │   └── secrets.js      # Secret management for credentials
+│   ├── routes/             # API routes
+│   │   └── subscriptions/  # Subscription-related endpoints
+│   │       └── index.js    # Route handlers for subscriptions
+│   ├── services/           # Business logic services
+│   │   ├── processors/     # Data source processors
+│   │   │   ├── base.js     # Base processor class
+│   │   │   ├── boe.js      # BOE-specific processor
 │   │   │   └── registry.js # Processor type registry
-│   │   └── subscriptionProcessor.js # Main subscription processing logic
-│   └── index.js         # Application entry point
-├── Dockerfile           # Container configuration
-├── cloudbuild.yaml      # Cloud Build deployment configuration
-└── scheduler.yaml       # Cloud Scheduler job configuration
+│   │   ├── subscription/   # Subscription handling
+│   │   │   ├── database.js # Database operations for subscriptions
+│   │   │   ├── index.js    # Main subscription processing logic
+│   │   │   ├── notification.js # Notification creation and publishing
+│   │   │   └── processing.js   # Subscription processing utilities
+│   │   └── subscriptionProcessor.js # Main processor service
+│   └── index.js            # Service entry point
+├── Dockerfile              # Container configuration
+├── package.json            # Dependencies and scripts
+└── README.md               # This documentation
 ```
 
 ## Component Overview
 
-### Configuration (`src/config/`)
-- `database.js`: Manages PostgreSQL connection pool with Cloud SQL
-- `logger.js`: Configures structured logging with Pino
-- `secrets.js`: Handles secure access to configuration via Secret Manager
-- `pubsub.js`: Manages PubSub topic connections and message publishing
+The service consists of these key components:
 
-### Services (`src/services/`)
-- `processors/`: Content processing implementations
-  - `base.js`: Abstract base processor with common functionality
-  - `boe.js`: BOE-specific content processor with retry capabilities
-  - `registry.js`: Registry for managing processor types
-- `subscriptionProcessor.js`: Core business logic
-  - Coordinates subscription processing
-  - Manages database transactions
-  - Handles error recovery and retries
-  - Detailed debug logging for each processing step
+1. **Subscription Processor**: Manages the processing of user subscriptions, delegating to the appropriate data source processor.
+
+2. **BOE Processor**: Processes BOE-related subscriptions by querying the BOE Analyzer API and handling the results.
+
+3. **Notification Service**: Creates notifications in the database and publishes them to the notification and email topics.
+
+4. **PubSub Integration**: Manages message publishing to the notification-worker and email-notification services.
+
+5. **Database Service**: Handles all database operations related to subscriptions and notifications.
 
 ## Service URLs
 
-- Main Service: `https://subscription-worker-415554190254.us-central1.run.app`
-- BOE Parser: `https://boe-parser-415554190254.us-central1.run.app`
+- **Production**: https://subscription-processor-[PROJECT_ID].a.run.app
+- **Development**: http://localhost:8080
+
+## Email Notification Integration
+
+The subscription-worker now integrates with the email notification system through:
+
+1. **User Preference Checking**: Before sending email notifications, the system checks if the user has enabled email notifications and their preferred frequency (immediate or daily digest).
+
+2. **PubSub Publishing**: Notifications are published to dedicated PubSub topics:
+   - `email-notifications-immediate`: For notifications that should be sent immediately
+   - `email-notifications-daily`: For notifications that will be included in daily digest emails
+
+3. **Debug Mode**: For the test user (nifyacorp@gmail.com), immediate notifications are always enabled for debugging purposes, regardless of their preferences.
 
 ## API Endpoints
 
 ### Health Check
-```http
-GET /_health
-```
-Returns the service and database health status.
+- **URL**: `/health`
+- **Method**: `GET`
+- **Description**: Returns service health status
+- **Response**: `{"status": "ok", "time": "2023-01-01T00:00:00.000Z"}`
 
 ### Get Pending Subscriptions
-```http
-GET /pending-subscriptions
-```
-Returns a list of all active subscriptions that are ready for processing.
-
-Response format:
+- **URL**: `/api/v1/subscriptions/pending`
+- **Method**: `GET`
+- **Description**: Retrieves subscriptions pending processing
+- **Query Parameters**:
+  - `limit` (optional): Maximum number of subscriptions to return
+  - `type` (optional): Filter by subscription type
+- **Response**:
 ```json
 {
-   "count": 2,
-   "subscriptions": [
-     {
-       "processing_id": "uuid",
-       "subscription_id": "uuid",
-       "metadata": {},
-       "user_id": "uuid",
-       "type_id": "boe",
-       "prompts": ["query1", "query2"],
-       "frequency": "daily",
-       "last_check_at": "2024-02-04T11:00:00Z"
-     }
-   ]
-}
-```
-
-### Process Single Subscription
-```http
-POST /process-subscription/:id
-```
-Processes a specific subscription by ID. The endpoint will:
-1. Lock the subscription for processing
-2. Update its status to 'processing'
-3. Process content based on subscription type
-4. Create notifications for matches
-5. Update processing status and schedule next run
-
-Response format:
-```json
-{
-  "status": "success",
-  "subscription_id": "uuid",
-  "matches_found": 2
-}
-```
-
-### Process Subscriptions
-```http
-POST /process-subscriptions
-```
-Triggers the processing of all pending subscriptions.
-
-Response format:
-```json
-{
-  "status": "success",
-  "processed": 2,
-  "results": [
+  "subscriptions": [
     {
-      "subscription_id": "uuid",
-      "status": "success",
-      "matches_found": 1
+      "subscription_id": "123e4567-e89b-12d3-a456-426614174000",
+      "user_id": "user_123",
+      "type": "boe",
+      "prompts": ["prompt1", "prompt2"],
+      "created_at": "2023-01-01T00:00:00.000Z"
     }
-  ]
+  ],
+  "count": 1
+}
+```
+
+### Process Subscription
+- **URL**: `/api/v1/subscriptions/:id/process`
+- **Method**: `POST`
+- **Description**: Manually triggers processing for a specific subscription
+- **Path Parameters**:
+  - `id`: Subscription ID
+- **Response**:
+```json
+{
+  "status": "success",
+  "subscription_id": "123e4567-e89b-12d3-a456-426614174000",
+  "matches": 5,
+  "processing_time_ms": 1200
 }
 ```
 
 ### Debug BOE Analysis
-```http
-POST /boe/debug/analyze-boe
-Content-Type: application/json
-
+- **URL**: `/api/v1/debug/boe`
+- **Method**: `POST`
+- **Description**: Debug endpoint for testing BOE analysis
+- **Request Body**:
+```json
 {
-  "prompts": [
-    "Find all resolutions about public employment",
-    "List announcements about environmental grants"
+  "prompt": "Example prompt text",
+  "documents": [
+    {
+      "title": "Sample BOE Document",
+      "content": "Sample content...",
+      "publication_date": "2023-01-01"
+    }
   ]
 }
 ```
-Test endpoint for direct BOE content analysis.
-
-## Debugging and Monitoring
-
-The service includes comprehensive debug logging for each processing step:
-
-1. Subscription Processing:
-   - Pool status and connection metrics
-   - Query execution times
-   - Processing status updates
-   - Content analysis timing
-   - Notification creation metrics
-
-2. BOE Processing:
-   - Service URL configuration
-   - Request/response timing and retries
-   - Match statistics
-   - Error details
-   - Timeout and retry attempt logging
-
-3. Database Operations:
-   - Connection pool metrics
-   - Query execution times
-   - Transaction status
-   - Error handling
-
-4. PubSub Operations:
-   - Message formatting
-   - Publishing status
-   - Error handling with DLQ support
-   - Retry logic for failed publishes
-
-All logs are structured JSON format with:
-- Timestamps
-- Operation context
-- Performance metrics
-- Error details when applicable
-
-## Testing
-
-Use curl to test the endpoints:
-
-```bash
-# Health check
-curl http://localhost:8080/_health
-
-# Get pending subscriptions
-curl http://localhost:8080/pending-subscriptions
-
-# Process all subscriptions
-curl -X POST http://localhost:8080/process-subscriptions
-
-# Process specific subscription
-curl -X POST http://localhost:8080/process-subscription/YOUR_SUBSCRIPTION_ID
-
-# Test BOE analysis
-curl -X POST http://localhost:8080/boe/debug/analyze-boe \
-  -H "Content-Type: application/json" \
-  -d '{
-    "prompts": [
-      "Find all resolutions about public employment",
-      "List announcements about environmental grants"
-    ]
-  }'
+- **Response**:
+```json
+{
+  "status": "success",
+  "matches": [
+    {
+      "title": "Sample BOE Document",
+      "relevance_score": 0.85,
+      "summary": "AI-generated summary...",
+      "publication_date": "2023-01-01"
+    }
+  ],
+  "processing_time_ms": 800
+}
 ```
+
+## Debugging & Monitoring
+
+The service logs all operations in JSON format for easy ingestion by monitoring tools:
+
+1. **Subscription Processing**:
+   - Subscription request received
+   - Processor type selected
+   - Processing results
+   - Error conditions
+
+2. **BOE Processing**:
+   - API requests to BOE Analyzer
+   - Response status and timing
+   - Match count and sample data
+
+3. **Database Operations**:
+   - Query execution
+   - Row counts
+   - Error conditions
+
+4. **PubSub Operations**:
+   - Message publication to notification topics
+   - Message publication to email notification topics (immediate and daily)
+   - Error handling and dead-letter queues
+
+5. **Email Notification**:
+   - User preference checks
+   - Publication attempts to email topics
+   - Success/failure status
 
 ## Environment Variables
 
-```env
-# Database Configuration
-DB_HOST=
-DB_PORT=
-DB_NAME=
-DB_USER=
-DB_PASSWORD=
+### Required
+- `PROJECT_ID`: Google Cloud project ID
+- `PORT`: Server port (default: 8080)
+- `DB_CONNECTION_NAME`: Cloud SQL connection name (format: project:region:instance)
+- `DB_SOCKET_PATH`: Unix socket path for Cloud SQL Proxy connection
 
-# Google Cloud Configuration
-PROJECT_ID=your-project-id
-GCP_KEY_FILE= (optional for local development)
+### Optional
+- `NODE_ENV`: Environment mode (development/production)
+- `LOG_LEVEL`: Logging level (default: info)
+- `DB_NAME`: Database name (default from secrets)
+- `DB_USER`: Database user (default from secrets)
+- `DB_PASSWORD`: Database password (default from secrets)
+- `BOE_API_URL`: URL for BOE Analyzer API
+- `BOE_API_KEY`: API key for BOE Analyzer
+- `MOCK_DB`: Enable mock database mode (for development)
+- `PUBSUB_TOPIC_NAME`: Topic for notification messages
+- `PUBSUB_DLQ_TOPIC_NAME`: Dead-letter queue topic
 
-# Content Parser Configuration
-PARSER_API_KEY=
-BOE_API_URL=
+## Testing
 
-# PubSub Configuration
-PUBSUB_TOPIC_NAME=processor-results
-PUBSUB_SUBSCRIPTION_NAME=notifications-worker
-PUBSUB_DLQ_TOPIC_NAME=processor-results-dlq
+### Local Testing
+1. Set environment variables in `.env` file
+2. Run `npm run dev` for development mode with hot reloading
+3. Use Postman or curl to test API endpoints
 
-# Server Configuration
-LOG_LEVEL=info
-PORT=8080
-NODE_ENV=production
-```
+### Unit Tests
+Run `npm test` to execute the test suite, which covers:
+- Subscription processing logic
+- BOE processor functionality
+- Notification creation and delivery
+- Email notification integration
 
-## Recent Architectural Changes
-
-### 1. Notification Publishing Responsibility
-
-This service has been updated to take over notification publishing responsibilities from the content parser services. The new workflow is:
-
-1. Subscription Worker receives a subscription processing request
-2. It retrieves the subscription details from the database
-3. It sends the prompts to the appropriate content parser (e.g., BOE Parser)
-4. The content parser analyzes and returns matches (NOT publishing to PubSub)
-5. The Subscription Worker formats the matches and publishes them to PubSub
-6. The Notification Worker processes these messages and creates user notifications
-
-This change improves separation of concerns:
-- Content parsers focus solely on content analysis
-- Subscription Worker orchestrates the entire process
-- Notification Worker handles notification creation and delivery
-
-### 2. Resilient BOE Parser Integration
-
-We've improved the reliability of communication with the BOE Parser service:
-
-- **Retry Mechanism**: Implements exponential backoff retries for transient errors
-- **Dynamic Timeouts**: Increases timeout duration for successive retry attempts
-- **Error Classification**: Distinguishes between retryable and non-retryable errors
-- **Detailed Logging**: Captures complete information about retry attempts
-
-These changes ensure that temporary issues with the BOE Parser don't cause subscription processing to fail completely.
-
-### 3. Enhanced PubSub Integration
-
-The PubSub configuration has been updated to:
-
-- Use environment variables for topic names (`PUBSUB_TOPIC_NAME`, `PUBSUB_DLQ_TOPIC_NAME`)
-- Support Dead Letter Queue (DLQ) for failed message publishing
-- Provide detailed error information in DLQ messages
-- Add comprehensive logging for message publishing attempts
-
-## How It Works
-
-The main component is the `SubscriptionProcessor` class which:
-1. Connects to the PostgreSQL database
-2. Retrieves subscription details
-3. Determines which content parser to use based on the subscription type
-4. Calls the appropriate parser service via HTTP (with retry logic)
-5. Formats and publishes notification messages to PubSub (with DLQ support)
-6. Updates the subscription processing status in the database
-
-## Configuration
-
-The service requires the following environment variables:
-
-```
-# Database Configuration
-DB_HOST=
-DB_PORT=
-DB_NAME=
-DB_USER=
-DB_PASSWORD=
-
-# Google Cloud Configuration
-PROJECT_ID=
-GCP_KEY_FILE= (optional for local development)
-
-# Content Parser Configuration
-PARSER_API_KEY=
-BOE_API_URL=
-
-# PubSub Configuration
-PUBSUB_TOPIC_NAME=processor-results
-PUBSUB_SUBSCRIPTION_NAME=notifications-worker
-PUBSUB_DLQ_TOPIC_NAME=processor-results-dlq
-
-# Other Configuration
-PORT=8080
-NODE_ENV=production
-LOG_LEVEL=info
-```
-
-## Local Development
-
-1. Install dependencies:
-```
-npm install
-```
-
-2. Create a `.env` file with the required environment variables
-
-3. Start the service:
-```
-npm run dev
-```
+### Integration Tests
+Run `npm run test:integration` to test with actual cloud services (requires GCP credentials)
 
 ## Deployment
 
-The service is deployed to Google Cloud Run:
+The service is deployed to Google Cloud Run using Cloud Build:
 
-```
-gcloud builds submit --tag gcr.io/[PROJECT_ID]/subscription-worker
-
-gcloud run deploy subscription-worker \
-  --image gcr.io/[PROJECT_ID]/subscription-worker \
-  --platform managed \
-  --region us-central1 \
-  --allow-unauthenticated \
-  --set-env-vars="PUBSUB_TOPIC_NAME=processor-results,PUBSUB_SUBSCRIPTION_NAME=notifications-worker,PUBSUB_DLQ_TOPIC_NAME=processor-results-dlq"
+```bash
+gcloud builds submit --tag gcr.io/[PROJECT_ID]/subscription-processor
+gcloud run deploy subscription-processor --image gcr.io/[PROJECT_ID]/subscription-processor --platform managed
 ```
 
-## Dependencies
+## Email Notification Configuration
 
-- Express - Web framework
-- pg - PostgreSQL client
-- @google-cloud/pubsub - Google Cloud Pub/Sub client
-- pino - Logging
-- axios - HTTP client for calling parser services
+To properly configure email notification integration:
+
+1. Ensure the following secrets are available in Secret Manager:
+   - `EMAIL_IMMEDIATE_TOPIC_NAME`: PubSub topic for immediate notifications
+   - `EMAIL_DAILY_TOPIC_NAME`: PubSub topic for daily digest notifications
+
+2. For local development, set these values in your environment variables
