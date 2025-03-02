@@ -411,60 +411,119 @@ function createDebugRouter(subscriptionProcessor, pool) {
     }
   });
 
-  // Initialize DOGA processor with custom URL and key for testing
+  // Add endpoint to initialize DOGA processor with custom settings
   router.post('/initialize-doga', async (req, res) => {
     try {
       const { apiUrl, apiKey } = req.body;
+      const logger = req.app.get('logger');
       
-      logger.info('Initializing DOGA processor with custom configuration', {
-        api_url_provided: !!apiUrl,
-        api_key_provided: !!apiKey
+      logger.info('Initializing DOGA processor with custom settings', {
+        apiUrl: apiUrl ? 'provided' : 'not provided',
+        apiKey: apiKey ? 'provided (length: ' + apiKey.length + ')' : 'not provided'
       });
-      
+
+      // Import the DOGA processor
       const DOGAProcessor = require('../services/processors/doga');
       
-      // Create a new DOGA processor with the provided configuration
+      // Create a new instance with the provided configuration
       const dogaProcessor = new DOGAProcessor({
-        DOGA_API_URL: apiUrl,
-        DOGA_API_KEY: apiKey
+        DOGA_API_KEY: apiKey,
+        DOGA_API_URL: apiUrl
       });
-      
-      // Update the processor in the subscription processor
+
+      // Update the processor map in the subscription processor
+      const subscriptionProcessor = req.app.get('subscriptionProcessor');
+      subscriptionProcessor.dogaController = dogaProcessor;
       subscriptionProcessor.processorMap['doga'] = dogaProcessor;
-      
+
       // Test the connection
       let connectionStatus = 'unknown';
       try {
-        // Make a simple ping request to check if the service is up
-        const response = await dogaProcessor.client.get('/ping', { timeout: 5000 });
-        connectionStatus = response.status >= 200 && response.status < 300 ? 'success' : 'error';
+        // Try to ping the DOGA service
+        await dogaProcessor.client.get('/ping');
+        connectionStatus = 'connected';
       } catch (pingError) {
-        connectionStatus = 'error';
-        logger.warn('Failed to ping DOGA service', {
+        logger.error('Failed to connect to DOGA service', {
           error: pingError.message,
-          status: pingError.response?.status
+          stack: pingError.stack
         });
+        connectionStatus = 'failed';
       }
-      
+
       return res.json({
-        status: 'success',
+        success: true,
+        message: 'DOGA processor initialized with custom settings',
         processor: {
           type: 'doga',
-          api_url: dogaProcessor.apiUrl,
-          api_key_present: !!dogaProcessor.apiKey,
-          connection_status: connectionStatus
-        },
-        message: 'DOGA processor initialized with custom configuration'
+          apiUrl: apiUrl || 'not provided',
+          hasApiKey: !!apiKey,
+          connectionStatus
+        }
       });
     } catch (error) {
-      logger.error('Error initializing DOGA processor', {
+      req.app.get('logger').error('Error initializing DOGA processor', {
         error: error.message,
         stack: error.stack
       });
       
       return res.status(500).json({
-        status: 'error',
-        error: error.message
+        success: false,
+        error: error.message,
+        stack: process.env.NODE_ENV === 'development' ? error.stack : undefined
+      });
+    }
+  });
+
+  // Add a new endpoint to test the DOGA processor
+  router.post('/test-doga', async (req, res) => {
+    try {
+      const logger = req.app.get('logger');
+      logger.info('Testing DOGA processor', { body: req.body });
+
+      const subscriptionProcessor = req.app.get('subscriptionProcessor');
+      const dogaProcessor = subscriptionProcessor.processorMap['doga'];
+      
+      if (!dogaProcessor) {
+        logger.error('DOGA processor not found in processor map');
+        return res.status(500).json({
+          success: false,
+          error: 'DOGA processor not initialized'
+        });
+      }
+
+      // Create a test subscription object
+      const testSubscription = {
+        id: 'test-doga-' + Date.now(),
+        type: 'doga',
+        config: req.body.config || {
+          keywords: ['test', 'prueba'],
+          sections: ['all']
+        },
+        lastProcessedDate: null
+      };
+
+      logger.info('Processing test DOGA subscription', { subscription: testSubscription });
+      
+      // Process the test subscription
+      const result = await dogaProcessor.processSubscription(testSubscription);
+      
+      logger.info('DOGA test processing completed', { result });
+      
+      return res.json({
+        success: true,
+        message: 'DOGA processor test completed',
+        result
+      });
+    } catch (error) {
+      req.app.get('logger').error('Error testing DOGA processor', {
+        error: error.message,
+        stack: error.stack
+      });
+      
+      return res.status(500).json({
+        success: false,
+        error: error.message,
+        stack: process.env.NODE_ENV === 'development' ? error.stack : undefined
       });
     }
   });
