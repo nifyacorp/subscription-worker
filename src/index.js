@@ -11,6 +11,7 @@ const SubscriptionProcessor = require('./services/subscription');
 const createBOERouter = require('./routes/boe');
 const createHealthRouter = require('./routes/health'); 
 const createSubscriptionRouter = require('./routes/subscriptions/index');
+const createDebugRouter = require('./routes/debug');
 
 const logger = getLogger('server');
 const expressLogger = expressPino({ logger });
@@ -158,6 +159,13 @@ async function startServer() {
     app.use(createHealthRouter(pool));
     app.use(createSubscriptionRouter(subscriptionProcessor));
     app.use('/boe', createBOERouter(parserApiKey));
+    
+    // Register debug routes (protected by NODE_ENV check to prevent access in production)
+    if (process.env.NODE_ENV !== 'production' || process.env.ENABLE_DEBUG_ROUTES === 'true') {
+      app.use('/debug', createDebugRouter(subscriptionProcessor, pool));
+      logger.info('Debug routes registered');
+    }
+    
     logger.info('Routes registered');
 
     // Add error handling middleware

@@ -34,9 +34,30 @@ class SubscriptionProcessor {
       // We don't throw here to allow other functionalities to work
     }
     
+    // Initialize DOGA controller
+    try {
+      const DOGAProcessor = require('../processors/doga');
+      this.dogaController = new DOGAProcessor({
+        DOGA_API_KEY: this.parserApiKey,
+        DOGA_API_URL: process.env.DOGA_API_URL || 'https://doga-parser-415554190254.us-central1.run.app'
+      });
+
+      this.logger.info('DOGA Controller initialized successfully', {
+        controller_type: typeof this.dogaController,
+        has_process_method: typeof this.dogaController.processSubscription === 'function'
+      });
+    } catch (error) {
+      this.logger.error('Failed to initialize DOGA controller', {
+        error: error.message,
+        stack: error.stack
+      });
+      // We don't throw here to allow other functionalities to work
+    }
+    
     // Map subscription types to their processors
     this.processorMap = {
       'boe': this.boeController,
+      'doga': this.dogaController
       // Add other processors as needed
     };
     
