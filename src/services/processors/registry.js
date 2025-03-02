@@ -1,4 +1,5 @@
 const BOEProcessor = require('./boe');
+const DOGAProcessor = require('./doga');
 const { getLogger } = require('../../config/logger');
 
 const logger = getLogger('processor-registry');
@@ -12,6 +13,7 @@ class ProcessorRegistry {
   registerDefaultProcessors() {
     // Register built-in processors
     this.register('boe', BOEProcessor);
+    this.register('doga', DOGAProcessor);
   }
 
   register(type, ProcessorClass) {
