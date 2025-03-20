@@ -102,98 +102,45 @@ class BOEProcessor extends BaseProcessor {
    * @returns {Promise<Object>} The processing result
    */
   async processSubscription(subscription) {
-    // Validate the subscription input
-    if (!subscription) {
+    // Use ZOD validation to validate and sanitize the subscription
+    const { validateSubscription, sanitizeSubscription } = require('../../utils/validation');
+    
+    // First sanitize the subscription
+    const sanitizedSubscription = sanitizeSubscription(subscription);
+    
+    if (!sanitizedSubscription) {
       this.logger.error('Subscription is null or undefined');
       throw new Error('Cannot process null or undefined subscription');
     }
     
+    // Validate the subscription
+    const validationResult = validateSubscription(sanitizedSubscription);
+    
+    if (!validationResult.valid) {
+      this.logger.warn('Subscription validation warnings', {
+        errors: validationResult.errors,
+        subscription_id: sanitizedSubscription.subscription_id || sanitizedSubscription.id || 'unknown'
+      });
+      // Continue with the sanitized data even if validation has warnings
+    }
+    
+    // Use the validated/sanitized subscription
+    const validSubscription = validationResult.data;
+    
     // Extract user ID and subscription ID
-    const subscription_id = subscription.subscription_id || subscription.id;
-    const user_id = subscription.user_id;
+    const subscription_id = validSubscription.subscription_id || validSubscription.id;
+    const user_id = validSubscription.user_id;
     
     this.logger.debug('Processing BOE subscription', {
       subscription_id: subscription_id || 'unknown',
       user_id: user_id || 'unknown',
-      subscription_type: typeof subscription,
-      subscription_fields: Object.keys(subscription || {})
+      subscription_type: typeof validSubscription,
+      subscription_fields: Object.keys(validSubscription || {})
     });
     
-    // Extract prompts from the subscription - handle all possible locations and missing data
-    let prompts = [];
-    
-    // More detailed logging about where we're looking for prompts
-    this.logger.debug('Searching for prompts in subscription data', {
-      subscription_id: subscription_id || 'unknown',
-      has_prompts_direct: Array.isArray(subscription.prompts),
-      has_prompts_metadata: subscription.metadata && Array.isArray(subscription.metadata.prompts),
-      has_text_direct: Array.isArray(subscription.texts),
-      has_text_metadata: subscription.metadata && Array.isArray(subscription.metadata.texts),
-      metadata_keys: subscription.metadata ? Object.keys(subscription.metadata) : []
-    });
-
-    // Add VERY detailed logging about the subscription object
-    this.logger.debug('Complete subscription object contents', {
-      subscription_id: subscription_id || 'unknown',
-      subscription_type: typeof subscription,
-      subscription_properties: Object.getOwnPropertyNames(subscription),
-      prompts_field: subscription.prompts,
-      prompts_field_type: typeof subscription.prompts,
-      is_prompts_array: Array.isArray(subscription.prompts),
-      subscription_json: JSON.stringify(subscription).substring(0, 500) + '...',
-      constructor_name: subscription.constructor ? subscription.constructor.name : 'unknown'
-    });
-    
-    // Check for prompts in various locations
-    if (Array.isArray(subscription.prompts) && subscription.prompts.length > 0) {
-      this.logger.debug('Found prompts directly in subscription.prompts', {
-        prompts: subscription.prompts
-      });
-      prompts = subscription.prompts;
-    } else if (typeof subscription.prompts === 'string') {
-      // Handle case where prompts might be a string representation of an array
-      try {
-        const parsedPrompts = JSON.parse(subscription.prompts);
-        if (Array.isArray(parsedPrompts) && parsedPrompts.length > 0) {
-          this.logger.debug('Found prompts in string format, parsed to array', {
-            prompts: parsedPrompts
-          });
-          prompts = parsedPrompts;
-        } else {
-          // If it's a string but not an array, use it as a single prompt
-          this.logger.debug('Found prompts as a single string', {
-            prompt: subscription.prompts
-          });
-          prompts = [subscription.prompts];
-        }
-      } catch (error) {
-        // If it's not valid JSON, use it as a single prompt
-        this.logger.debug('Found prompts as non-JSON string, using as single prompt', {
-          prompt: subscription.prompts
-        });
-        prompts = [subscription.prompts];
-      }
-    } else if (subscription.metadata && Array.isArray(subscription.metadata.prompts) && subscription.metadata.prompts.length > 0) {
-      this.logger.debug('Found prompts in subscription.metadata.prompts', {
-        prompts: subscription.metadata.prompts
-      });
-      prompts = subscription.metadata.prompts;
-    } else if (Array.isArray(subscription.texts) && subscription.texts.length > 0) {
-      this.logger.debug('Found prompts in subscription.texts', {
-        prompts: subscription.texts
-      });
-      prompts = subscription.texts;
-    } else if (subscription.metadata && Array.isArray(subscription.metadata.texts) && subscription.metadata.texts.length > 0) {
-      this.logger.debug('Found prompts in subscription.metadata.texts', {
-        prompts: subscription.metadata.texts
-      });
-      prompts = subscription.metadata.texts;
-    } else {
-      this.logger.warn('No prompts found in subscription data, using default', {
-        subscription_id: subscription_id || 'unknown'
-      });
-      prompts = ['Información general del BOE'];
-    }
+    // Extract prompts - we can now trust that prompts is properly formatted
+    // due to the sanitization step
+    const prompts = validSubscription.prompts || [];
     
     try {
       // Analyze BOE content based on prompts

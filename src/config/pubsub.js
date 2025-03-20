@@ -115,6 +115,20 @@ async function publishNotificationMessage(subscription, matches, processorType =
     }
   };
   
+  // Validate the message before publishing
+  const { validatePubSubNotification } = require('../utils/validation');
+  const validationResult = validatePubSubNotification(message);
+  
+  if (!validationResult.valid) {
+    logger.warn('PubSub message validation warning', {
+      errors: validationResult.errors,
+      subscription_id: subscriptionId,
+      processor_type: processorType
+    });
+    // We continue with the sanitized message even if validation fails
+    // This ensures backward compatibility
+  }
+  
   // Log the notification message
   logger.debug('Publishing notification message', {
     trace_id: message.trace_id,
