@@ -138,9 +138,40 @@ class BOEProcessor extends BaseProcessor {
       subscription_fields: Object.keys(validSubscription || {})
     });
     
-    // Extract prompts - we can now trust that prompts is properly formatted
-    // due to the sanitization step
-    const prompts = validSubscription.prompts || [];
+    // Normalize prompts to ensure consistent format
+    let prompts = [];
+
+    if (validSubscription.prompts) {
+      // Handle different formats of prompts
+      if (Array.isArray(validSubscription.prompts)) {
+        prompts = validSubscription.prompts.filter(p => typeof p === 'string' && p.trim());
+      } else if (typeof validSubscription.prompts === 'string') {
+        // Try to parse as JSON if it looks like an array
+        if (validSubscription.prompts.trim().startsWith('[')) {
+          try {
+            const parsed = JSON.parse(validSubscription.prompts);
+            if (Array.isArray(parsed)) {
+              prompts = parsed.filter(p => typeof p === 'string' && p.trim());
+            } else {
+              prompts = [validSubscription.prompts];
+            }
+          } catch (e) {
+            // Not valid JSON, treat as single prompt
+            prompts = [validSubscription.prompts];
+          }
+        } else {
+          // Single prompt string
+          prompts = [validSubscription.prompts.trim()];
+        }
+      }
+    }
+
+    this.logger.debug('Normalized prompts for BOE processing', {
+      subscription_id: validSubscription.subscription_id,
+      original_prompts: validSubscription.prompts,
+      normalized_prompts: prompts,
+      normalized_count: prompts.length
+    });
     
     try {
       // Analyze BOE content based on prompts

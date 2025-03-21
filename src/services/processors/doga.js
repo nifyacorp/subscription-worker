@@ -132,40 +132,32 @@ class DOGAProcessor extends BaseProcessor {
       metadata_keys: subscription.metadata ? Object.keys(subscription.metadata) : []
     });
     
-    // Check for prompts in various locations
-    if (Array.isArray(subscription.prompts) && subscription.prompts.length > 0) {
-      this.logger.debug('Found prompts directly in subscription.prompts', {
-        prompts: subscription.prompts
-      });
-      prompts = subscription.prompts;
-    } else if (typeof subscription.prompts === 'string') {
-      // Handle case where prompts might be a string representation of an array
-      try {
-        const parsedPrompts = JSON.parse(subscription.prompts);
-        if (Array.isArray(parsedPrompts) && parsedPrompts.length > 0) {
-          this.logger.debug('Found prompts in string format, parsed to array', {
-            prompts: parsedPrompts
-          });
-          prompts = parsedPrompts;
+    // Normalize prompts to ensure consistent format
+    if (subscription.prompts) {
+      // Handle different formats of prompts
+      if (Array.isArray(subscription.prompts)) {
+        prompts = subscription.prompts.filter(p => typeof p === 'string' && p.trim());
+      } else if (typeof subscription.prompts === 'string') {
+        // Try to parse as JSON if it looks like an array
+        if (subscription.prompts.trim().startsWith('[')) {
+          try {
+            const parsed = JSON.parse(subscription.prompts);
+            if (Array.isArray(parsed)) {
+              prompts = parsed.filter(p => typeof p === 'string' && p.trim());
+            } else {
+              prompts = [subscription.prompts];
+            }
+          } catch (e) {
+            // Not valid JSON, treat as single prompt
+            prompts = [subscription.prompts];
+          }
         } else {
-          // If it's a string but not an array, use it as a single prompt
-          this.logger.debug('Found prompts as a single string', {
-            prompt: subscription.prompts
-          });
-          prompts = [subscription.prompts];
+          // Single prompt string
+          prompts = [subscription.prompts.trim()];
         }
-      } catch (error) {
-        // If it's not valid JSON, use it as a single prompt
-        this.logger.debug('Found prompts as non-JSON string, using as single prompt', {
-          prompt: subscription.prompts
-        });
-        prompts = [subscription.prompts];
       }
-    } else if (subscription.metadata && Array.isArray(subscription.metadata.prompts) && subscription.metadata.prompts.length > 0) {
-      this.logger.debug('Found prompts in subscription.metadata.prompts', {
-        prompts: subscription.metadata.prompts
-      });
-      prompts = subscription.metadata.prompts;
+    } else if (subscription.metadata && Array.isArray(subscription.metadata.prompts)) {
+      prompts = subscription.metadata.prompts.filter(p => typeof p === 'string' && p.trim());
     } else if (Array.isArray(subscription.texts) && subscription.texts.length > 0) {
       this.logger.debug('Found prompts in subscription.texts', {
         prompts: subscription.texts
@@ -182,6 +174,13 @@ class DOGAProcessor extends BaseProcessor {
       });
       prompts = ['Información general del DOGA'];
     }
+    
+    this.logger.debug('Normalized prompts for DOGA processing', {
+      subscription_id: subscription.subscription_id,
+      original_prompts: subscription.prompts,
+      normalized_prompts: prompts,
+      normalized_count: prompts.length
+    });
     
     try {
       // Analyze DOGA content based on prompts

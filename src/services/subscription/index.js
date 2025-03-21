@@ -9,6 +9,38 @@ const { publishNotificationMessage } = require('../../config/pubsub');
 const logger = getLogger('subscription-processor');
 
 class SubscriptionProcessor {
+  /**
+   * Normalize prompts to ensure they are in the correct format
+   * @param {any} prompts - Prompts that could be string, array, or JSON string
+   * @returns {string[]} - Normalized array of prompt strings
+   */
+  normalizePrompts(prompts) {
+    if (!prompts) return [];
+    
+    if (Array.isArray(prompts)) {
+      return prompts.filter(p => typeof p === 'string' && p.trim());
+    }
+    
+    if (typeof prompts === 'string') {
+      // Try to parse as JSON if it looks like an array
+      if (prompts.trim().startsWith('[')) {
+        try {
+          const parsed = JSON.parse(prompts);
+          if (Array.isArray(parsed)) {
+            return parsed.filter(p => typeof p === 'string' && p.trim());
+          }
+        } catch (e) {
+          // Not valid JSON, treat as single prompt
+        }
+      }
+      
+      // Single prompt string
+      return [prompts.trim()];
+    }
+    
+    return [];
+  }
+
   constructor(pool, parserApiKey) {
     this.pool = pool;
     this.parserApiKey = parserApiKey;
@@ -243,26 +275,28 @@ class SubscriptionProcessor {
         metadata: subscription.metadata || {}
       };
 
-      // Ensure prompts are included in the subscription data
-      if (Array.isArray(subscription.prompts)) {
-        subscriptionData.prompts = subscription.prompts;
-        logger.debug('Added prompts to subscription data', {
-          subscription_id: subscriptionId,
-          prompts: subscription.prompts
-        });
-      } else {
-        logger.warn('No prompts array found in subscription, checking other fields', {
-          subscription_id: subscriptionId
-        });
+      // Normalize prompts regardless of the format they come in
+      subscriptionData.prompts = this.normalizePrompts(subscription.prompts);
+      
+      logger.debug('Normalized prompts for processing', {
+        subscription_id: subscriptionId,
+        original_prompts_type: typeof subscription.prompts,
+        original_is_array: Array.isArray(subscription.prompts),
+        normalized_prompts: subscriptionData.prompts,
+        normalized_count: subscriptionData.prompts.length
+      });
+
+      // Only use metadata.prompts if we don't already have prompts and they exist in metadata
+      if (!subscriptionData.prompts.length && subscription.metadata && subscription.metadata.prompts) {
+        subscriptionData.prompts = this.normalizePrompts(subscription.metadata.prompts);
         
-        // Try to find prompts information in other fields
-        if (subscription.metadata && subscription.metadata.prompts) {
-          subscriptionData.prompts = subscription.metadata.prompts;
-          logger.debug('Added prompts from metadata to subscription data', {
-            subscription_id: subscriptionId,
-            prompts: subscription.metadata.prompts
-          });
-        }
+        logger.debug('Using prompts from metadata', {
+          subscription_id: subscriptionId,
+          metadata_prompts_type: typeof subscription.metadata.prompts,
+          metadata_is_array: Array.isArray(subscription.metadata.prompts),
+          normalized_prompts: subscriptionData.prompts,
+          normalized_count: subscriptionData.prompts.length
+        });
       }
 
       // Get the processor based on the subscription type
