@@ -59,10 +59,10 @@ const ParserResponseSchema = z.object({
 function createKeepAliveAgent(isHttps = true) {
   const options = {
     keepAlive: true,
-    keepAliveMsecs: 30000, // 30 seconds
-    maxSockets: 100,
-    maxFreeSockets: 10,
-    timeout: 60000 // 60 seconds socket timeout
+    keepAliveMsecs: 10000, // 10 seconds - reduced from 30 seconds
+    maxSockets: 50, // Reduced from 100
+    maxFreeSockets: 5, // Reduced from 10
+    timeout: 120000 // 120 seconds socket timeout - match with DEFAULT_TIMEOUT
   };
   
   return isHttps ? new https.Agent(options) : new http.Agent(options);
@@ -404,6 +404,15 @@ class ParserClient {
     
     if (this.httpsAgent) {
       this.httpsAgent.destroy();
+    }
+    
+    // Cancel any pending requests
+    if (this.client) {
+      // Create a new CancelToken to cancel any pending requests
+      const CancelToken = axios.CancelToken;
+      this.client.defaults.cancelToken = new CancelToken(cancel => {
+        cancel('Operation cancelled due to client close');
+      });
     }
     
     this.logger.debug('Parser client connections closed');
