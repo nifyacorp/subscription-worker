@@ -7,22 +7,24 @@ const expressPino = require('express-pino-logger');
 const { promisify } = require('util');
 require('dotenv').config();
 
-const { getLogger } = require('./config/logger');
+const { getLogger, expressLogger } = require('./config/logger');
 const { initializePool } = require('./config/database');
 const { getSecret, initialize: initializeSecrets } = require('./config/secrets');
-const { initializePubSub } = require('./config/pubsub');
+const { initializePubSub, NotificationClient } = require('./config/pubsub');
 const createApiRouter = require('./routes/api');
 const createLegacyRouter = require('./routes/legacy');
 const createHealthRouter = require('./routes/health');
 
 // Repositories
-const SubscriptionRepository = require('./repositories/SubscriptionRepository');
-const NotificationRepository = require('./repositories/NotificationRepository');
-const ProcessTrackingRepository = require('./repositories/ProcessTrackingRepository');
+const { SubscriptionRepository, NotificationRepository, ProcessTrackingRepository } = require('./repositories');
 
 // Clients
 const ParserClient = require('./clients/ParserClient');
 const NotificationClient = require('./clients/NotificationClient');
+
+// Service
+const SubscriptionService = require('./services/SubscriptionService');
+const { SubscriptionController } = require('./controllers/SubscriptionController');
 
 const logger = getLogger('server');
 const expressLogger = expressPino({ logger });
