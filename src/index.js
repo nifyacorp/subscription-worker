@@ -157,7 +157,12 @@ async function startServer() {
 
     // Register routes
     app.use(createHealthRouter(pool));
-    app.use(createSubscriptionRouter(subscriptionProcessor));
+    
+    // Mount subscription router at both root and /subscriptions path for backward compatibility
+    const subscriptionRouter = createSubscriptionRouter(subscriptionProcessor);
+    app.use(subscriptionRouter); // Direct routes like /process-subscription/:id
+    app.use('/subscriptions', subscriptionRouter); // Nested routes like /subscriptions/process-subscription/:id
+    
     app.use('/boe', createBOERouter(parserApiKey));
     
     // Register debug routes (protected by NODE_ENV check to prevent access in production)
