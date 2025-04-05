@@ -1,58 +1,70 @@
+/**
+ * Unified Subscription Processor Service
+ * 
+ * This service handles subscription processing with support for multiple processor types.
+ * It provides a consistent interface for subscription processing and notification creation.
+ */
 const { getLogger } = require('../../config/logger');
 const processorRegistry = require('../processors/registry');
 const DatabaseService = require('./database');
 const NotificationService = require('./notification');
 const ProcessingService = require('./processing');
 const BOEProcessor = require('../processors/boe');
+const DOGAProcessor = require('../processors/doga');
 const { publishNotificationMessage } = require('../../config/pubsub');
+const { PubSub } = require('@google-cloud/pubsub');
 
 const logger = getLogger('subscription-processor');
 
+// Default values
+const DEFAULT_PROMPTS = ['Información general', 'Noticias importantes'];
+const DEFAULT_MATCH_LIMIT = 10;
+const NOTIFICATION_TOPIC = process.env.NOTIFICATION_TOPIC || 'subscription-notifications';
+
 class SubscriptionProcessor {
   /**
-   * Normalize prompts to ensure they are in the correct format
-   * @param {any} prompts - Prompts that could be string, array, or JSON string
-   * @returns {string[]} - Normalized array of prompt strings
+   * Create a new SubscriptionProcessor
+   * @param {Object} pool - Database connection pool
+   * @param {string} parserApiKey - API key for parser services
    */
-  normalizePrompts(prompts) {
-    if (!prompts) return [];
-    
-    if (Array.isArray(prompts)) {
-      return prompts.filter(p => typeof p === 'string' && p.trim());
-    }
-    
-    if (typeof prompts === 'string') {
-      // Try to parse as JSON if it looks like an array
-      if (prompts.trim().startsWith('[')) {
-        try {
-          const parsed = JSON.parse(prompts);
-          if (Array.isArray(parsed)) {
-            return parsed.filter(p => typeof p === 'string' && p.trim());
-          }
-        } catch (e) {
-          // Not valid JSON, treat as single prompt
-        }
-      }
-      
-      // Single prompt string
-      return [prompts.trim()];
-    }
-    
-    return [];
-  }
-
   constructor(pool, parserApiKey) {
     this.pool = pool;
     this.parserApiKey = parserApiKey;
     this.logger = getLogger('subscription-processor');
+    this.pubsub = null;
     
-    // Explicitly initialize the BOE controller
+    // Initialize database service for consistent DB operations
+    this.dbService = new DatabaseService(pool);
+    this.notificationService = new NotificationService(pool);
+    
+    // Initialize PubSub if in production environment
+    if (process.env.NODE_ENV === 'production') {
+      try {
+        this.pubsub = new PubSub({
+          projectId: process.env.GOOGLE_CLOUD_PROJECT || process.env.PROJECT_ID
+        });
+        
+        // Get the notification topic
+        this.notificationTopic = this.pubsub.topic(NOTIFICATION_TOPIC);
+        
+        this.logger.info('PubSub initialized for notification publishing', {
+          topic: NOTIFICATION_TOPIC
+        });
+      } catch (error) {
+        this.logger.warn('Failed to initialize PubSub', {
+          error: error.message
+        });
+      }
+    }
+    
+    // Explicitly initialize processor controllers
     try {
-      const BOEProcessor = require('../processors/boe');
-      this.boeController = new BOEProcessor({
+      const boeConfig = {
         BOE_API_KEY: this.parserApiKey,
         BOE_API_URL: process.env.BOE_API_URL || 'https://boe-parser-415554190254.us-central1.run.app'
-      });
+      };
+      
+      this.boeController = new BOEProcessor(boeConfig);
       
       this.logger.info('BOE Controller initialized successfully', {
         controller_type: typeof this.boeController,
@@ -68,11 +80,12 @@ class SubscriptionProcessor {
     
     // Initialize DOGA controller
     try {
-      const DOGAProcessor = require('../processors/doga');
-      this.dogaController = new DOGAProcessor({
+      const dogaConfig = {
         DOGA_API_KEY: this.parserApiKey,
         DOGA_API_URL: process.env.DOGA_API_URL || 'https://doga-parser-415554190254.us-central1.run.app'
-      });
+      };
+      
+      this.dogaController = new DOGAProcessor(dogaConfig);
 
       this.logger.info('DOGA Controller initialized successfully', {
         controller_type: typeof this.dogaController,
@@ -101,9 +114,44 @@ class SubscriptionProcessor {
   }
   
   /**
+   * Normalize prompts to ensure they are in the correct format
+   * @param {any} prompts - Prompts that could be string, array, or JSON string
+   * @returns {string[]} - Normalized array of prompt strings
+   */
+  normalizePrompts(prompts) {
+    if (!prompts) return DEFAULT_PROMPTS;
+    
+    if (Array.isArray(prompts)) {
+      const filtered = prompts.filter(p => typeof p === 'string' && p.trim());
+      return filtered.length > 0 ? filtered : DEFAULT_PROMPTS;
+    }
+    
+    if (typeof prompts === 'string') {
+      // Try to parse as JSON if it looks like an array
+      if (prompts.trim().startsWith('[')) {
+        try {
+          const parsed = JSON.parse(prompts);
+          if (Array.isArray(parsed)) {
+            const filtered = parsed.filter(p => typeof p === 'string' && p.trim());
+            return filtered.length > 0 ? filtered : DEFAULT_PROMPTS;
+          }
+        } catch (e) {
+          // Not valid JSON, treat as single prompt
+        }
+      }
+      
+      // Single prompt string
+      return [prompts.trim()];
+    }
+    
+    return DEFAULT_PROMPTS;
+  }
+  
+  /**
    * Process a single subscription by ID
    * @param {string} subscriptionId - The ID of the subscription to process
-   * @returns {Promise<object>} Processing result
+   * @param {Object} options - Optional processing parameters
+   * @returns {Promise<Object>} Processing result
    */
   async processSubscription(subscriptionId, options = {}) {
     const logger = this.logger.child({ 
@@ -158,7 +206,7 @@ class SubscriptionProcessor {
       };
     }
 
-    let knex;
+    let client = null;
     let connectionAttempts = 0;
     const MAX_CONNECTION_ATTEMPTS = 3;
     
@@ -170,7 +218,7 @@ class SubscriptionProcessor {
           subscription_id: subscriptionId
         });
         
-        knex = await this.connectToDatabase();
+        client = await this.pool.connect();
         break; // Connection successful, exit the retry loop
       } catch (connectionError) {
         // If we've reached the max attempts, throw the error
@@ -205,7 +253,8 @@ class SubscriptionProcessor {
         SELECT 
           s.*,
           t.name as type_name,
-          t.id as type_id
+          t.id as type_id,
+          t.slug as type_slug
         FROM 
           subscriptions s
         LEFT JOIN 
@@ -220,7 +269,7 @@ class SubscriptionProcessor {
         sql_query: sqlQuery
       });
       
-      const subscriptionQueryResult = await knex.query(
+      const subscriptionQueryResult = await client.query(
         sqlQuery, 
         [subscriptionId]
       );
@@ -252,19 +301,8 @@ class SubscriptionProcessor {
         subscription_keys: Object.keys(subscription),
         prompts_exists: 'prompts' in subscription,
         prompts_type: subscription.prompts ? typeof subscription.prompts : 'undefined',
-        prompts_value: subscription.prompts,
-        prompts_array: Array.isArray(subscription.prompts) ? subscription.prompts : null,
-        metadata_exists: 'metadata' in subscription,
-        metadata_content: subscription.metadata,
         type_id: subscription.type_id,
         type_slug: subscription.type_slug
-      });
-
-      logger.debug('Found subscription', {
-        subscription_id: subscriptionId,
-        type_slug: subscription.type_slug,
-        type_id: subscription.type_id,
-        is_active: subscription.is_active
       });
 
       // Prepare subscription data for processing
@@ -310,10 +348,10 @@ class SubscriptionProcessor {
           available_processors: Object.keys(this.processorMap)
         });
         
-        await this.updateProcessingError(knex, subscriptionId, 'No processor found for subscription type');
+        await this.updateProcessingError(client, subscriptionId, 'No processor found for subscription type');
         return {
           status: 'error',
-          error: `No processor found for subscription type: ${subscription.type_slug}`,
+          error: `No processor found for subscription type: ${subscription.type_slug || 'unknown'}`,
           subscription_id: subscriptionId
         };
       }
@@ -332,7 +370,7 @@ class SubscriptionProcessor {
           processor_type: processor.constructor.name
         });
         
-        await this.updateProcessingError(knex, subscriptionId, errorMessage);
+        await this.updateProcessingError(client, subscriptionId, errorMessage);
         return {
           status: 'error',
           error: errorMessage,
@@ -367,7 +405,7 @@ class SubscriptionProcessor {
             processor: processor.constructor.name
           });
           
-          await this.updateProcessingError(knex, subscriptionId, result.error || 'Unknown processor error');
+          await this.updateProcessingError(client, subscriptionId, result.error || 'Unknown processor error');
           return {
             status: 'error',
             error: result.error || 'Unknown processor error',
@@ -376,65 +414,117 @@ class SubscriptionProcessor {
           };
         }
         
-        // NEW STEP: Publish notification message directly to Pub/Sub
-        // Instead of relying on the BOE parser to publish
+        // Create notifications for matches if found
         if (result && (result.matches?.length > 0 || result.entries?.length > 0)) {
           const matches = result.matches || result.entries || [];
           
           if (matches.length > 0) {
-            logger.info('Publishing notification message for matches', {
+            logger.info('Creating notifications for matches', {
               subscription_id: subscriptionId,
               matches_count: matches.length
             });
             
             try {
-              // Determine processor type from subscription
-              const processorType = subscription.type_slug || 'boe';
-              
-              // Forward the complete subscription data along with matches
-              const messageId = await publishNotificationMessage(
-                subscriptionData, 
-                matches, 
-                processorType
+              // Create notifications in the database
+              const notificationResult = await this.createNotifications(
+                client,
+                subscription,
+                matches,
+                subscription.type_slug || 'boe'
               );
               
-              logger.info('Successfully published notification message', {
+              logger.info('Created notifications successfully', {
                 subscription_id: subscriptionId,
-                message_id: messageId,
-                matches_count: matches.length
+                notifications_created: notificationResult.created,
+                errors: notificationResult.errors
               });
-            } catch (pubsubError) {
-              logger.error('Failed to publish notification message', {
+              
+              // Also publish to PubSub if available
+              if (this.pubsub && this.notificationTopic) {
+                try {
+                  // Determine processor type from subscription
+                  const processorType = subscription.type_slug || 'boe';
+                  
+                  // Forward the complete subscription data along with matches
+                  const messageId = await publishNotificationMessage(
+                    subscriptionData, 
+                    matches, 
+                    processorType
+                  );
+                  
+                  logger.info('Successfully published notification message', {
+                    subscription_id: subscriptionId,
+                    message_id: messageId,
+                    matches_count: matches.length
+                  });
+                } catch (pubsubError) {
+                  logger.error('Failed to publish notification message', {
+                    subscription_id: subscriptionId,
+                    error: pubsubError.message,
+                    stack: pubsubError.stack
+                  });
+                  // We continue processing despite the error
+                }
+              }
+            } catch (notificationError) {
+              logger.error('Error creating notifications', {
                 subscription_id: subscriptionId,
-                error: pubsubError.message,
-                stack: pubsubError.stack
+                error: notificationError.message,
+                stack: notificationError.stack
               });
-              // We continue processing despite the error
+              // Continue processing - notifications failure shouldn't fail the whole process
             }
           } else {
-            logger.info('No matches to publish notifications for', {
+            logger.info('No matches to create notifications for', {
               subscription_id: subscriptionId
             });
           }
         }
         
         // Update the processing record to completed status
-        const updateQuery = `
-          UPDATE subscription_processing 
-          SET status = 'completed', last_run_at = NOW(), next_run_at = NOW() + INTERVAL '1 day', updated_at = NOW()
-          WHERE subscription_id = $1
-          RETURNING *
-        `;
-        const processingRecordResult = await knex.query(updateQuery, [subscriptionId]);
-        const processingRecord = processingRecordResult.rows[0];
-        
-        return {
-          status: 'success',
-          subscription_id: subscriptionId,
-          processing_id: processingRecord?.id,
-          entries_count: result?.entries?.length || 0,
-          completed_at: new Date().toISOString()
-        };
+        try {
+          const updateQuery = `
+            UPDATE subscription_processing 
+            SET status = 'completed', last_run_at = NOW(), next_run_at = NOW() + INTERVAL '1 day', updated_at = NOW()
+            WHERE subscription_id = $1
+            RETURNING *
+          `;
+          const processingRecordResult = await client.query(updateQuery, [subscriptionId]);
+          
+          // Also update the subscription last_processed_at
+          await client.query(`
+            UPDATE subscriptions
+            SET last_processed_at = NOW(), updated_at = NOW()
+            WHERE id = $1
+          `, [subscriptionId]);
+          
+          const processingRecord = processingRecordResult.rows[0];
+          
+          return {
+            status: 'success',
+            subscription_id: subscriptionId,
+            processing_id: processingRecord?.id,
+            entries_count: result?.entries?.length || 0,
+            matches_count: result?.matches?.length || 0,
+            completed_at: new Date().toISOString()
+          };
+        } catch (updateError) {
+          logger.error('Error updating processing record', {
+            subscription_id: subscriptionId,
+            error: updateError.message,
+            stack: updateError.stack
+          });
+          
+          // Still return success since the processing itself succeeded
+          return {
+            status: 'success',
+            subscription_id: subscriptionId,
+            warning: 'Processing successful but failed to update processing record',
+            entries_count: result?.entries?.length || 0,
+            matches_count: result?.matches?.length || 0,
+            completed_at: new Date().toISOString()
+          };
+        }
       } catch (error) {
         logger.error('Error during subscription processing', {
           subscription_id: subscriptionId,
@@ -443,30 +533,27 @@ class SubscriptionProcessor {
         });
         
         // Attempt to update processing status as error
-        const errorUpdateQuery = `
-          UPDATE subscription_processing 
-          SET status = 'failed', error = $2, updated_at = NOW()
-          WHERE subscription_id = $1
-          RETURNING *
-        `;
-        await knex.query(errorUpdateQuery, [subscriptionId, error.message || 'Unknown error during processing']);
+        try {
+          const errorUpdateQuery = `
+            UPDATE subscription_processing 
+            SET status = 'failed', error = $2, updated_at = NOW()
+            WHERE subscription_id = $1
+            RETURNING *
+          `;
+          await client.query(errorUpdateQuery, [subscriptionId, error.message || 'Unknown error during processing']);
+        } catch (updateError) {
+          logger.error('Error updating processing record after failure', {
+            subscription_id: subscriptionId,
+            original_error: error.message,
+            update_error: updateError.message
+          });
+        }
         
         return {
           status: 'error',
           error: error.message || 'Unknown error during processing',
           subscription_id: subscriptionId
         };
-      } finally {
-        // Ensure database connection is cleaned up
-        if (knex) {
-          try {
-            await knex.destroy();
-          } catch (dbError) {
-            logger.error('Error closing database connection', { 
-              error: dbError.message 
-            });
-          }
-        }
       }
     } catch (error) {
       logger.error('Error in subscription processing workflow', {
@@ -480,169 +567,21 @@ class SubscriptionProcessor {
         error: error.message,
         subscription_id: subscriptionId
       };
-    }
-  }
-
-  /**
-   * Update the processing record with error status
-   * @param {Object} knex - Knex database instance
-   * @param {string} subscriptionId - Subscription ID
-   * @param {string} errorMessage - Error message
-   * @returns {Promise<Object>} Updated processing record
-   */
-  async updateProcessingError(knex, subscriptionId, errorMessage) {
-    try {
-      const query = `
-        UPDATE subscription_processing
-        SET status = 'failed', error = $2, updated_at = NOW()
-        WHERE subscription_id = $1
-        RETURNING *
-      `;
-      const result = await knex.query(query, [subscriptionId, errorMessage]);
-      
-      if (result.rows.length === 0) {
-        // If no processing record exists, create one
-        const insertQuery = `
-          INSERT INTO subscription_processing
-          (subscription_id, status, error, created_at, updated_at)
-          VALUES ($1, 'failed', $2, NOW(), NOW())
-          RETURNING *
-        `;
-        const insertResult = await knex.query(insertQuery, [subscriptionId, errorMessage]);
-        return insertResult.rows[0];
-      }
-      
-      return result.rows[0];
-    } catch (error) {
-      this.logger.error('Error updating processing status to error', {
-        subscription_id: subscriptionId,
-        error: error.message,
-        original_error: errorMessage
-      });
-      // We don't throw here to avoid cascading errors
-      return null;
-    }
-  }
-  
-  /**
-   * Update the processing record with success status
-   * @param {Object} knex - Knex database instance
-   * @param {string} subscriptionId - Subscription ID
-   * @returns {Promise<Object>} Updated processing record
-   */
-  async updateProcessingSuccess(knex, subscriptionId) {
-    try {
-      // Update subscription_processing table
-      const query = `
-        UPDATE subscription_processing
-        SET status = 'completed', last_run_at = NOW(), next_run_at = NOW() + INTERVAL '1 day', updated_at = NOW()
-        WHERE subscription_id = $1
-        RETURNING *
-      `;
-      const result = await knex.query(query, [subscriptionId]);
-      
-      if (result.rows.length === 0) {
-        // If no processing record exists, create one
-        const insertQuery = `
-          INSERT INTO subscription_processing
-          (subscription_id, status, last_run_at, next_run_at, created_at, updated_at)
-          VALUES ($1, 'completed', NOW(), NOW() + INTERVAL '1 day', NOW(), NOW())
-          RETURNING *
-        `;
-        const insertResult = await knex.query(insertQuery, [subscriptionId]);
-        return insertResult.rows[0];
-      }
-      
-      return result.rows[0];
-    } catch (error) {
-      this.logger.error('Error updating processing status to success', {
-        subscription_id: subscriptionId,
-        error: error.message
-      });
-      // We don't throw here to avoid cascading errors
-      return null;
-    }
-  }
-
-  async processSubscriptions() {
-    this.logger.debug({
-      processors: Array.from(this.processors.keys()),
-      debug_mode: true,
-      pool_total: this.pool.totalCount,
-      pool_idle: this.pool.idleCount,
-      pool_waiting: this.pool.waitingCount,
-      boe_controller_exists: !!this.boeController,
-      boe_processor_exists: !!this.processors.get('boe')
-    }, 'Starting batch subscription processing');
-    
-    const startTime = Date.now();
-    const client = await this.pool.connect();
-    
-    try {
-      // Get pending subscriptions
-      const subscriptions = await this.dbService.getPendingSubscriptions(client);
-      
-      if (!subscriptions.length) {
-        this.logger.debug('No pending subscriptions found');
-        return;
-      }
-
-      // Process each subscription
-      const processingResults = [];
-      for (const subscription of subscriptions) {
+    } finally {
+      // Ensure database connection is released
+      if (client) {
         try {
-          // Update status to processing
-          await this.dbService.updateProcessingStatus(client, subscription.processing_id, 'processing');
-          
-          // Process the subscription
-          const result = await this.processingService.processSubscription(
-            subscription,
-            this.processors.get('boe'), // Force BOE processor since it's our only type
-            this.logger
-          );
-
-          // Create notifications for matches if any
-          if (result.matches.length > 0) {
-            await this.notificationService.createNotifications(client, subscription, result.matches);
-          }
-
-          // Update status to completed
-          await this.dbService.completeProcessing(client, subscription, result);
-
-          processingResults.push({
-            subscription_id: subscription.subscription_id,
-            status: 'success',
-            matches_found: result.matches.length
+          client.release();
+          logger.debug('Database client released', {
+            subscription_id: subscriptionId
           });
-
-        } catch (error) {
-          this.logger.error({ error }, 'Failed to process subscription');
-          
-          // Update to failed status
-          await this.dbService.handleProcessingFailure(client, subscription, error);
-
-          processingResults.push({
-            subscription_id: subscription.subscription_id,
-            status: 'error',
-            error: error.message
+        } catch (releaseError) {
+          logger.error('Error releasing database client', { 
+            error: releaseError.message,
+            subscription_id: subscriptionId
           });
         }
       }
-
-      this.logger.info({
-        total_time: Date.now() - startTime,
-        processed_count: subscriptions.length,
-        success_count: processingResults.filter(r => r.status === 'success').length,
-        error_count: processingResults.filter(r => r.status === 'error').length
-      }, 'Completed processing subscriptions');
-
-      return processingResults;
-
-    } catch (error) {
-      this.logger.error({ error }, 'Failed to process subscriptions batch');
-      throw error;
-    } finally {
-      client.release();
     }
   }
 
@@ -692,136 +631,316 @@ class SubscriptionProcessor {
   }
 
   /**
-   * Connect to the database and get a knex instance
-   * @returns {Promise<Object>} Knex instance
+   * Update the processing record with error status
+   * @param {Object} client - Database client
+   * @param {string} subscriptionId - Subscription ID
+   * @param {string} errorMessage - Error message
+   * @returns {Promise<Object>} Updated processing record
    */
-  async connectToDatabase() {
-    let client = null;
-    
+  async updateProcessingError(client, subscriptionId, errorMessage) {
     try {
-      // Connect to the database
-      this.logger.debug('Attempting to acquire database client from pool', {
-        pool_stats: {
-          total_count: this.pool.totalCount,
-          idle_count: this.pool.idleCount,
-          waiting_count: this.pool.waitingCount
-        }
+      const query = `
+        UPDATE subscription_processing
+        SET status = 'failed', error = $2, updated_at = NOW()
+        WHERE subscription_id = $1
+        RETURNING *
+      `;
+      const result = await client.query(query, [subscriptionId, errorMessage]);
+      
+      if (result.rows.length === 0) {
+        // If no processing record exists, create one
+        const insertQuery = `
+          INSERT INTO subscription_processing
+          (subscription_id, status, error, created_at, updated_at)
+          VALUES ($1, 'failed', $2, NOW(), NOW())
+          RETURNING *
+        `;
+        const insertResult = await client.query(insertQuery, [subscriptionId, errorMessage]);
+        return insertResult.rows[0];
+      }
+      
+      return result.rows[0];
+    } catch (error) {
+      this.logger.error('Error updating processing status to error', {
+        subscription_id: subscriptionId,
+        error: error.message,
+        original_error: errorMessage
+      });
+      // We don't throw here to avoid cascading errors
+      return null;
+    }
+  }
+  
+  /**
+   * Create notifications for a subscription based on matches
+   * @param {Object} client - Database client
+   * @param {Object} subscription - The subscription data
+   * @param {Array<Object>} matches - The matches from the processor
+   * @param {string} entityType - The type of entity (e.g., 'boe', 'doga')
+   * @returns {Promise<Object>} Result of notification creation
+   */
+  async createNotifications(client, subscription, matches, entityType = 'boe') {
+    if (!matches || matches.length === 0) {
+      this.logger.info('No matches to create notifications for', {
+        subscription_id: subscription.id,
+        user_id: subscription.user_id
       });
       
+      return { created: 0, errors: 0 };
+    }
+    
+    const user_id = subscription.user_id;
+    const subscription_id = subscription.id;
+    let notificationsCreated = 0;
+    let errors = 0;
+    
+    this.logger.info('Starting to create notifications', {
+      user_id,
+      subscription_id,
+      match_count: matches.length
+    });
+    
+    // Process each match and create notifications
+    for (const match of matches) {
+      try {
+        // Generate a meaningful title for the notification
+        const notificationTitle = match.notification_title || this.generateTitle(match);
+        
+        // Create entity_type for metadata
+        const formattedEntityType = `${entityType}:${match.document_type?.toLowerCase() || 'document'}`;
+        
+        // Insert the notification into the database
+        const result = await client.query(
+          `INSERT INTO notifications (
+            user_id,
+            subscription_id,
+            title,
+            content,
+            source_url,
+            metadata,
+            entity_type,
+            created_at
+          ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+          RETURNING id`,
+          [
+            user_id,
+            subscription_id,
+            notificationTitle,
+            match.summary || match.content || '',
+            match.links?.html || match.url || '',
+            JSON.stringify({
+              prompt: match.prompt,
+              relevance: match.relevance_score,
+              document_type: match.document_type,
+              original_title: match.title,
+              publication_date: match.publication_date || match.dates?.publication_date,
+              issuing_body: match.issuing_body,
+              section: match.section,
+              department: match.department
+            }),
+            formattedEntityType,
+            new Date()
+          ]
+        );
+        
+        this.logger.info('Created notification', {
+          user_id,
+          subscription_id,
+          notification_id: result.rows[0]?.id,
+          title: notificationTitle,
+          document_type: match.document_type,
+          entity_type: formattedEntityType
+        });
+        
+        notificationsCreated++;
+      } catch (error) {
+        errors++;
+        this.logger.error('Failed to create notification', {
+          user_id,
+          subscription_id,
+          error: error.message,
+          error_code: error.code,
+          stack: error.stack?.substring(0, 500) || 'No stack trace',
+          title: match.notification_title || match.title
+        });
+        // Continue processing other notifications
+      }
+    }
+    
+    this.logger.info('Notification creation completed', {
+      user_id,
+      subscription_id,
+      notifications_created: notificationsCreated,
+      errors,
+      success_rate: notificationsCreated > 0 ? 
+        `${Math.round((notificationsCreated / (notificationsCreated + errors)) * 100)}%` : '0%'
+    });
+    
+    return { created: notificationsCreated, errors };
+  }
+
+  /**
+   * Generate a notification title from a document
+   * @param {Object} doc - The document data
+   * @returns {string} Generated title
+   */
+  generateTitle(doc) {
+    // Try to use notification_title if available (optimized for display)
+    if (doc.notification_title && doc.notification_title.length > 3 && 
+        doc.notification_title !== 'string' && !doc.notification_title.includes('notification')) {
+      return doc.notification_title;
+    }
+    
+    // Otherwise try the original title
+    if (doc.title && doc.title.length > 3 && 
+        doc.title !== 'string' && !doc.title.includes('notification')) {
+      // Truncate long titles for consistency
+      return doc.title.length > 80 
+        ? doc.title.substring(0, 77) + '...' 
+        : doc.title;
+    }
+    
+    // If both are missing, construct a descriptive title
+    if (doc.document_type) {
+      const docType = doc.document_type || 'Documento';
+      const issuer = doc.issuing_body || doc.department || '';
+      const date = doc.dates?.publication_date ? ` (${doc.dates.publication_date})` : '';
+      
+      return `${docType}${issuer ? ' de ' + issuer : ''}${date}`;
+    }
+    
+    // Last resort - use basic info
+    return `Alerta de documento: ${new Date().toLocaleDateString()}`;
+  }
+
+  /**
+   * Process pending subscriptions in batch
+   * @returns {Promise<Array>} Processing results
+   */
+  async processPendingSubscriptions() {
+    this.logger.info('Starting batch subscription processing');
+    
+    if (!this.pool) {
+      this.logger.error('No database pool available for batch processing');
+      return { status: 'error', error: 'No database pool available' };
+    }
+    
+    let client = null;
+    try {
       client = await this.pool.connect();
       
-      this.logger.debug('Successfully acquired database client', {
-        connection_active: !!client,
-        client_properties: client ? Object.keys(client) : [],
-        client_methods: client ? Object.getOwnPropertyNames(Object.getPrototypeOf(client)) : [],
-        pool_stats: {
-          total_count: this.pool.totalCount,
-          idle_count: this.pool.idleCount,
-          waiting_count: this.pool.waitingCount
+      // Get pending subscriptions
+      const query = `
+        SELECT 
+          sp.id as processing_id,
+          sp.subscription_id,
+          sp.status,
+          sp.next_run_at,
+          s.user_id,
+          s.prompts,
+          s.type_id,
+          st.name as type_name,
+          st.slug as type_slug
+        FROM 
+          subscription_processing sp
+        JOIN 
+          subscriptions s ON s.id = sp.subscription_id
+        LEFT JOIN 
+          subscription_types st ON s.type_id = st.id
+        WHERE 
+          sp.status = 'pending' 
+          OR (sp.status = 'completed' AND sp.next_run_at < NOW())
+        ORDER BY 
+          sp.next_run_at ASC
+        LIMIT 10
+      `;
+      
+      const result = await client.query(query);
+      
+      if (result.rows.length === 0) {
+        this.logger.info('No pending subscriptions found');
+        return { status: 'success', processed: 0, subscriptions: [] };
+      }
+      
+      const pendingSubscriptions = result.rows;
+      this.logger.info(`Found ${pendingSubscriptions.length} pending subscriptions to process`);
+      
+      // Process each subscription
+      const results = [];
+      for (const subscription of pendingSubscriptions) {
+        try {
+          this.logger.info(`Processing subscription ${subscription.subscription_id}`);
+          
+          // Update status to in-progress
+          await client.query(`
+            UPDATE subscription_processing
+            SET status = 'processing', updated_at = NOW()
+            WHERE id = $1
+          `, [subscription.processing_id]);
+          
+          // Process the subscription
+          const processingResult = await this.processSubscription(subscription.subscription_id);
+          
+          results.push({
+            subscription_id: subscription.subscription_id,
+            processing_id: subscription.processing_id,
+            status: processingResult.status,
+            error: processingResult.error
+          });
+        } catch (error) {
+          this.logger.error(`Error processing subscription ${subscription.subscription_id}`, {
+            error: error.message,
+            stack: error.stack
+          });
+          
+          results.push({
+            subscription_id: subscription.subscription_id,
+            processing_id: subscription.processing_id,
+            status: 'error',
+            error: error.message
+          });
+          
+          // Update status to error
+          try {
+            await client.query(`
+              UPDATE subscription_processing
+              SET status = 'failed', error = $2, updated_at = NOW()
+              WHERE id = $1
+            `, [subscription.processing_id, error.message]);
+          } catch (updateError) {
+            this.logger.error(`Error updating processing status for ${subscription.subscription_id}`, {
+              error: updateError.message
+            });
+          }
         }
+      }
+      
+      this.logger.info('Batch processing completed', {
+        total: pendingSubscriptions.length,
+        success: results.filter(r => r.status === 'success').length,
+        errors: results.filter(r => r.status === 'error').length
       });
       
-      // Test basic connectivity with raw query
-      try {
-        await client.query('SELECT 1 as connection_test');
-        this.logger.debug('Basic client query test successful');
-        
-        // Instead of creating a knex instance, we'll return a simplified wrapper
-        // that provides basic query functionality compatible with our code
-        return {
-          client: client,
-          // Basic query method
-          query: async (text, params) => {
-            return client.query(text, params);
-          },
-          // Raw query that mimics knex.raw
-          raw: async (text, params) => {
-            return client.query(text, params);
-          },
-          // Select from table
-          select: async (columns) => {
-            return {
-              from: async (table) => {
-                return {
-                  where: async (column, value) => {
-                    const query = `SELECT ${columns} FROM ${table} WHERE ${column} = $1`;
-                    const result = await client.query(query, [value]);
-                    return result.rows;
-                  },
-                  first: async () => {
-                    const query = `SELECT ${columns} FROM ${table} LIMIT 1`;
-                    const result = await client.query(query);
-                    return result.rows[0];
-                  }
-                };
-              }
-            };
-          },
-          // Method to simulate knex('table').where(...)
-          table: (tableName) => {
-            return {
-              where: (column, value) => {
-                return {
-                  first: async () => {
-                    const query = `SELECT * FROM ${tableName} WHERE ${column} = $1 LIMIT 1`;
-                    const result = await client.query(query, [value]);
-                    return result.rows[0] || null;
-                  },
-                  update: async (updates) => {
-                    // Build UPDATE query
-                    const setClause = Object.entries(updates)
-                      .map(([key, _], index) => `${key} = $${index + 2}`)
-                      .join(', ');
-                    const values = [value, ...Object.values(updates)];
-                    const query = `UPDATE ${tableName} SET ${setClause} WHERE ${column} = $1 RETURNING *`;
-                    const result = await client.query(query, values);
-                    return result.rows;
-                  }
-                };
-              }
-            };
-          },
-          // Cleanup method
-          destroy: async () => {
-            if (client) {
-              await client.release();
-              this.logger.debug('Released database client in destroy method');
-            }
-          }
-        };
-      } catch (rawQueryError) {
-        this.logger.error('Basic client query test failed', {
-          error: rawQueryError.message,
-          code: rawQueryError.code,
-          stack: rawQueryError.stack
-        });
-        throw rawQueryError;
-      }
+      return {
+        status: 'success',
+        processed: pendingSubscriptions.length,
+        success_count: results.filter(r => r.status === 'success').length,
+        error_count: results.filter(r => r.status === 'error').length,
+        subscriptions: results
+      };
     } catch (error) {
-      this.logger.error('Failed to connect to database', {
+      this.logger.error('Error in batch subscription processing', {
         error: error.message,
-        error_code: error.code,
-        error_type: error.constructor.name,
-        stack: error.stack,
-        pool_stats: {
-          total_count: this.pool ? this.pool.totalCount : null,
-          idle_count: this.pool ? this.pool.idleCount : null,
-          waiting_count: this.pool ? this.pool.waitingCount : null
-        }
+        stack: error.stack
       });
-      throw new Error(`Database connection failed: ${error.message}`);
+      
+      return {
+        status: 'error',
+        error: error.message
+      };
     } finally {
-      // Clean up the client if it wasn't assigned to our wrapper
-      if (client && !client._assigned) {
-        try {
-          client.release();
-          this.logger.debug('Released database client in finally block');
-        } catch (releaseError) {
-          this.logger.error('Failed to release client in finally block', {
-            error: releaseError.message,
-            code: releaseError.code
-          });
-        }
+      if (client) {
+        client.release();
       }
     }
   }

@@ -1,0 +1,164 @@
+DEFAULT 2025-04-05T18:16:57.721086Z "remoteAddress": "::ffff:169.254.169.126",
+DEFAULT 2025-04-05T18:16:57.721091Z "remotePort": 4652
+DEFAULT 2025-04-05T18:16:57.721095Z }
+DEFAULT 2025-04-05T18:16:57.721100Z res: {
+DEFAULT 2025-04-05T18:16:57.721105Z "statusCode": 500,
+DEFAULT 2025-04-05T18:16:57.721109Z "headers": {
+DEFAULT 2025-04-05T18:16:57.721114Z "x-powered-by": "Express",
+DEFAULT 2025-04-05T18:16:57.721119Z "content-type": "application/json; charset=utf-8",
+DEFAULT 2025-04-05T18:16:57.721124Z "content-length": "204",
+DEFAULT 2025-04-05T18:16:57.721128Z "etag": "W/\"cc-JPMK0Nx70wbMqXRSq/VGoa/MnqU\""
+DEFAULT 2025-04-05T18:16:57.721135Z }
+DEFAULT 2025-04-05T18:16:57.721140Z }
+DEFAULT 2025-04-05T18:16:57.721144Z responseTime: 6
+DEFAULT 2025-04-05T18:16:57.721148Z err: {
+DEFAULT 2025-04-05T18:16:57.721169Z "type": "Error",
+DEFAULT 2025-04-05T18:16:57.721173Z "message": "failed with status code 500",
+DEFAULT 2025-04-05T18:16:57.721180Z "stack":
+DEFAULT 2025-04-05T18:16:57.721186Z Error: failed with status code 500
+DEFAULT 2025-04-05T18:16:57.721193Z at ServerResponse.onResFinished (/app/node_modules/pino-http/logger.js:107:40)
+DEFAULT 2025-04-05T18:16:57.721199Z at ServerResponse.emit (node:events:529:35)
+DEFAULT 2025-04-05T18:16:57.721205Z at onFinish (node:_http_outgoing:1008:10)
+DEFAULT 2025-04-05T18:16:57.721212Z at callback (node:internal/streams/writable:555:21)
+DEFAULT 2025-04-05T18:16:57.721218Z at afterWrite (node:internal/streams/writable:500:5)
+DEFAULT 2025-04-05T18:16:57.721222Z at afterWriteTick (node:internal/streams/writable:487:10)
+DEFAULT 2025-04-05T18:16:57.721227Z at process.processTicksAndRejections (node:internal/process/task_queues:81:21)
+DEFAULT 2025-04-05T18:16:57.721231Z }
+ERROR 2025-04-05T18:23:54.988188Z [httpRequest.requestMethod: POST] [httpRequest.status: 500] [httpRequest.responseSize: 403 B] [httpRequest.latency: 43 ms] [httpRequest.userAgent: axios 1.8.1] https://subscription-worker-415554190254.us-central1.run.app/process-subscription/16d6a630-3423-4ebe-b736-fc413504411f
+ERROR 2025-04-05T18:23:55.054208Z [httpRequest.requestMethod: POST] [httpRequest.status: 500] [httpRequest.responseSize: 403 B] [httpRequest.latency: 7 ms] [httpRequest.userAgent: axios 1.8.1] https://subscription-worker-415554190254.us-central1.run.app/subscriptions/process-subscription/16d6a630-3423-4ebe-b736-fc413504411f
+DEFAULT 2025-04-05T18:23:55.417235Z [2025-04-05 18:23:54.999 +0000] [34mDEBUG[39m (subscription-process): [36mProcess subscription request received[39m
+DEFAULT 2025-04-05T18:23:55.615576Z [2025-04-05 18:23:54.999 +0000] [32mINFO[39m (subscription-process): [36mProcessing subscription[39m
+DEFAULT 2025-04-05T18:23:55.615610Z [2025-04-05 18:23:55.038 +0000] [31mERROR[39m (subscription-process): [36mError in subscription processor[39m
+DEFAULT 2025-04-05T18:23:55.615614Z [2025-04-05 18:23:55.060 +0000] [34mDEBUG[39m (subscription-process): [36mProcess subscription request received[39m
+DEFAULT 2025-04-05T18:23:55.615618Z [2025-04-05 18:23:55.060 +0000] [32mINFO[39m (subscription-process): [36mProcessing subscription[39m
+DEFAULT 2025-04-05T18:23:55.615624Z [2025-04-05 18:23:55.063 +0000] [31mERROR[39m (subscription-process): [36mError in subscription processor[39m
+DEFAULT 2025-04-05T18:23:56.116102Z [2025-04-05 18:23:55.039 +0000] [32mINFO[39m (server): [36mrequest errored[39m
+DEFAULT 2025-04-05T18:23:56.116115Z req: {
+DEFAULT 2025-04-05T18:23:56.116133Z "id": 6,
+DEFAULT 2025-04-05T18:23:56.116138Z "method": "POST",
+DEFAULT 2025-04-05T18:23:56.116143Z "url": "/process-subscription/16d6a630-3423-4ebe-b736-fc413504411f",
+DEFAULT 2025-04-05T18:23:56.116148Z "query": {},
+DEFAULT 2025-04-05T18:23:56.116154Z "params": {},
+DEFAULT 2025-04-05T18:23:56.116159Z "headers": {
+DEFAULT 2025-04-05T18:23:56.116165Z "host": "subscription-worker-415554190254.us-central1.run.app",
+DEFAULT 2025-04-05T18:23:56.116171Z "accept": "application/json, text/plain, */*",
+DEFAULT 2025-04-05T18:23:56.116176Z "content-type": "application/json",
+DEFAULT 2025-04-05T18:23:56.116188Z "x-request-id": "req-1z",
+DEFAULT 2025-04-05T18:23:56.116193Z "x-processing-id": "unknown",
+DEFAULT 2025-04-05T18:23:56.116197Z "user-agent": "axios/1.8.1",
+DEFAULT 2025-04-05T18:23:56.116201Z "content-length": "184",
+DEFAULT 2025-04-05T18:23:56.116208Z "x-cloud-trace-context": "f39211747cf8aa2910b95ae3dd6ce271/11907060916762839516;o=1",
+DEFAULT 2025-04-05T18:23:56.116214Z "x-forwarded-proto": "https",
+DEFAULT 2025-04-05T18:23:56.116218Z "traceparent": "00-f39211747cf8aa2910b95ae3dd6ce271-a53e60d1469609dc-01",
+DEFAULT 2025-04-05T18:23:56.116222Z "x-forwarded-for": "34.96.47.43",
+DEFAULT 2025-04-05T18:23:56.116226Z "forwarded": "for=\"34.96.47.43\";proto=https",
+DEFAULT 2025-04-05T18:23:56.116231Z "accept-encoding": "gzip, compress, deflate, br"
+DEFAULT 2025-04-05T18:23:56.116235Z },
+DEFAULT 2025-04-05T18:23:56.116240Z "remoteAddress": "::ffff:169.254.169.126",
+DEFAULT 2025-04-05T18:23:56.116244Z "remotePort": 48204
+DEFAULT 2025-04-05T18:23:56.116249Z }
+DEFAULT 2025-04-05T18:23:56.116255Z res: {
+DEFAULT 2025-04-05T18:23:56.116262Z "statusCode": 500,
+DEFAULT 2025-04-05T18:23:56.116269Z "headers": {
+DEFAULT 2025-04-05T18:23:56.116274Z "x-powered-by": "Express",
+DEFAULT 2025-04-05T18:23:56.116279Z "content-type": "application/json; charset=utf-8",
+DEFAULT 2025-04-05T18:23:56.116283Z "content-length": "204",
+DEFAULT 2025-04-05T18:23:56.116288Z "etag": "W/\"cc-IX7RvEN2zSFThCSWD01yM6Js7qA\""
+DEFAULT 2025-04-05T18:23:56.116291Z }
+DEFAULT 2025-04-05T18:23:56.116296Z }
+DEFAULT 2025-04-05T18:23:56.116300Z responseTime: 40
+DEFAULT 2025-04-05T18:23:56.116304Z err: {
+DEFAULT 2025-04-05T18:23:56.116324Z "type": "Error",
+DEFAULT 2025-04-05T18:23:56.116328Z "message": "failed with status code 500",
+DEFAULT 2025-04-05T18:23:56.116332Z "stack":
+DEFAULT 2025-04-05T18:23:56.116340Z Error: failed with status code 500
+DEFAULT 2025-04-05T18:23:56.116346Z at ServerResponse.onResFinished (/app/node_modules/pino-http/logger.js:107:40)
+DEFAULT 2025-04-05T18:23:56.116351Z at ServerResponse.emit (node:events:529:35)
+DEFAULT 2025-04-05T18:23:56.116357Z at onFinish (node:_http_outgoing:1008:10)
+DEFAULT 2025-04-05T18:23:56.116362Z at callback (node:internal/streams/writable:555:21)
+DEFAULT 2025-04-05T18:23:56.116367Z at afterWrite (node:internal/streams/writable:500:5)
+DEFAULT 2025-04-05T18:23:56.116372Z at afterWriteTick (node:internal/streams/writable:487:10)
+DEFAULT 2025-04-05T18:23:56.116376Z at process.processTicksAndRejections (node:internal/process/task_queues:81:21)
+DEFAULT 2025-04-05T18:23:56.116380Z }
+DEFAULT 2025-04-05T18:23:56.415650Z [2025-04-05 18:23:55.064 +0000] [32mINFO[39m (server): [36mrequest errored[39m
+DEFAULT 2025-04-05T18:23:56.415667Z req: {
+DEFAULT 2025-04-05T18:23:56.415672Z "id": 7,
+DEFAULT 2025-04-05T18:23:56.415677Z "method": "POST",
+DEFAULT 2025-04-05T18:23:56.415683Z "url": "/subscriptions/process-subscription/16d6a630-3423-4ebe-b736-fc413504411f",
+DEFAULT 2025-04-05T18:23:56.415687Z "query": {},
+DEFAULT 2025-04-05T18:23:56.415692Z "params": {},
+DEFAULT 2025-04-05T18:23:56.415696Z "headers": {
+DEFAULT 2025-04-05T18:23:56.415701Z "host": "subscription-worker-415554190254.us-central1.run.app",
+DEFAULT 2025-04-05T18:23:56.415706Z "accept": "application/json, text/plain, */*",
+DEFAULT 2025-04-05T18:23:56.415710Z "content-type": "application/json",
+DEFAULT 2025-04-05T18:23:56.415715Z "x-request-id": "req-1z",
+DEFAULT 2025-04-05T18:23:56.415719Z "x-processing-id": "unknown",
+DEFAULT 2025-04-05T18:23:56.415723Z "user-agent": "axios/1.8.1",
+DEFAULT 2025-04-05T18:23:56.415727Z "content-length": "184",
+DEFAULT 2025-04-05T18:23:56.415732Z "x-cloud-trace-context": "4da48648d33448ec10b95ae3dd6ce9bc/15861205999603679543",
+DEFAULT 2025-04-05T18:23:56.415736Z "x-forwarded-proto": "https",
+DEFAULT 2025-04-05T18:23:56.415741Z "traceparent": "00-4da48648d33448ec10b95ae3dd6ce9bc-dc1e52d203ac0137-00",
+DEFAULT 2025-04-05T18:23:56.415746Z "x-forwarded-for": "34.96.47.43",
+DEFAULT 2025-04-05T18:23:56.415750Z "forwarded": "for=\"34.96.47.43\";proto=https",
+DEFAULT 2025-04-05T18:23:56.415754Z "accept-encoding": "gzip, compress, deflate, br"
+DEFAULT 2025-04-05T18:23:56.415758Z },
+DEFAULT 2025-04-05T18:23:56.415763Z "remoteAddress": "::ffff:169.254.169.126",
+DEFAULT 2025-04-05T18:23:56.415768Z "remotePort": 48214
+DEFAULT 2025-04-05T18:23:56.415771Z }
+DEFAULT 2025-04-05T18:23:56.415776Z res: {
+DEFAULT 2025-04-05T18:23:56.415780Z "statusCode": 500,
+DEFAULT 2025-04-05T18:23:56.415783Z "headers": {
+DEFAULT 2025-04-05T18:23:56.415787Z "x-powered-by": "Express",
+DEFAULT 2025-04-05T18:23:56.415791Z "content-type": "application/json; charset=utf-8",
+DEFAULT 2025-04-05T18:23:56.415794Z "content-length": "204",
+DEFAULT 2025-04-05T18:23:56.415798Z "etag": "W/\"cc-IX7RvEN2zSFThCSWD01yM6Js7qA\""
+DEFAULT 2025-04-05T18:23:56.415802Z }
+DEFAULT 2025-04-05T18:23:56.415806Z }
+DEFAULT 2025-04-05T18:23:56.415809Z responseTime: 4
+DEFAULT 2025-04-05T18:23:56.415813Z err: {
+DEFAULT 2025-04-05T18:23:56.415832Z "type": "Error",
+DEFAULT 2025-04-05T18:23:56.415837Z "message": "failed with status code 500",
+DEFAULT 2025-04-05T18:23:56.415841Z "stack":
+DEFAULT 2025-04-05T18:23:56.415848Z Error: failed with status code 500
+DEFAULT 2025-04-05T18:23:56.415854Z at ServerResponse.onResFinished (/app/node_modules/pino-http/logger.js:107:40)
+DEFAULT 2025-04-05T18:23:56.415858Z at ServerResponse.emit (node:events:529:35)
+DEFAULT 2025-04-05T18:23:56.415863Z at onFinish (node:_http_outgoing:1008:10)
+DEFAULT 2025-04-05T18:23:56.415867Z at callback (node:internal/streams/writable:555:21)
+DEFAULT 2025-04-05T18:23:56.415871Z at afterWrite (node:internal/streams/writable:500:5)
+DEFAULT 2025-04-05T18:23:56.415875Z at afterWriteTick (node:internal/streams/writable:487:10)
+DEFAULT 2025-04-05T18:23:56.415879Z at process.processTicksAndRejections (node:internal/process/task_queues:81:21)
+DEFAULT 2025-04-05T18:23:56.415884Z }
+WARNING 2025-04-05T18:24:16.361233Z [httpRequest.requestMethod: GET] [httpRequest.status: 404] [httpRequest.responseSize: 369 B] [httpRequest.latency: 4 ms] [httpRequest.userAgent: axios 1.8.4] https://subscription-worker-415554190254.us-central1.run.app/health
+DEFAULT 2025-04-05T18:24:16.815707Z [2025-04-05 18:24:16.367 +0000] [32mINFO[39m (server): [36mrequest completed[39m
+DEFAULT 2025-04-05T18:24:16.815747Z req: {
+DEFAULT 2025-04-05T18:24:16.815754Z "id": 8,
+DEFAULT 2025-04-05T18:24:16.815759Z "method": "GET",
+DEFAULT 2025-04-05T18:24:16.815766Z "url": "/health",
+DEFAULT 2025-04-05T18:24:16.815771Z "query": {},
+DEFAULT 2025-04-05T18:24:16.815778Z "params": {},
+DEFAULT 2025-04-05T18:24:16.815788Z "headers": {
+DEFAULT 2025-04-05T18:24:16.815795Z "host": "subscription-worker-415554190254.us-central1.run.app",
+DEFAULT 2025-04-05T18:24:16.815801Z "accept": "application/json, text/plain, */*",
+DEFAULT 2025-04-05T18:24:16.815806Z "user-agent": "axios/1.8.4",
+DEFAULT 2025-04-05T18:24:16.815810Z "x-cloud-trace-context": "b9d1292f4899399725d1c72253d4c204/14676631384021743447;o=1",
+DEFAULT 2025-04-05T18:24:16.815815Z "x-forwarded-proto": "https",
+DEFAULT 2025-04-05T18:24:16.815819Z "traceparent": "00-b9d1292f4899399725d1c72253d4c204-cbadde7bcff73757-01",
+DEFAULT 2025-04-05T18:24:16.815824Z "x-forwarded-for": "81.39.157.131",
+DEFAULT 2025-04-05T18:24:16.815828Z "forwarded": "for=\"81.39.157.131\";proto=https",
+DEFAULT 2025-04-05T18:24:16.815837Z "accept-encoding": "gzip, compress, deflate, br"
+DEFAULT 2025-04-05T18:24:16.815841Z },
+DEFAULT 2025-04-05T18:24:16.815848Z "remoteAddress": "::ffff:169.254.169.126",
+DEFAULT 2025-04-05T18:24:16.815855Z "remotePort": 53724
+DEFAULT 2025-04-05T18:24:16.815861Z }
+DEFAULT 2025-04-05T18:24:16.815866Z res: {
+DEFAULT 2025-04-05T18:24:16.815871Z "statusCode": 404,
+DEFAULT 2025-04-05T18:24:16.815876Z "headers": {
+DEFAULT 2025-04-05T18:24:16.815883Z "x-powered-by": "Express",
+DEFAULT 2025-04-05T18:24:16.815888Z "content-security-policy": "default-src 'none'",
+DEFAULT 2025-04-05T18:24:16.815894Z "x-content-type-options": "nosniff",
+DEFAULT 2025-04-05T18:24:16.815900Z "content-type": "text/html; charset=utf-8",
+DEFAULT 2025-04-05T18:24:16.815933Z "content-length": 145
+DEFAULT 2025-04-05T18:24:16.815937Z }
+DEFAULT 2025-04-05T18:24:16.815943Z }
+DEFAULT 2025-04-05T18:24:16.815949Z responseTime: 1
+Health endpoint test added

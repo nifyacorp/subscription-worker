@@ -5,7 +5,8 @@ const logger = getLogger('health-route');
 const router = express.Router();
 
 function createHealthRouter(pool) {
-  router.get('/_health', async (req, res) => {
+  // Add both /_health (original) and /health (requested in logs) endpoints
+  const healthCheck = async (req, res) => {
     try {
       const client = await pool.connect();
       try {
@@ -22,7 +23,10 @@ function createHealthRouter(pool) {
         error: error.message 
       });
     }
-  });
+  };
+
+  router.get('/_health', healthCheck);
+  router.get('/health', healthCheck);
 
   return router;
 }

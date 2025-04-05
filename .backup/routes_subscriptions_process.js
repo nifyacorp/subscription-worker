@@ -1,6 +1,9 @@
 const { getLogger } = require('../../config/logger'); 
 const logger = getLogger('subscription-process');
 
+// Track active processing to prevent duplicate requests
+const activeProcessing = new Map();
+
 const SUBSCRIPTION_STATES = {
   PENDING: 'pending',     // Initial state, ready to be sent
   SENDING: 'sending',     // Being sent to processor
@@ -249,6 +252,36 @@ function createProcessRouter(subscriptionProcessor) {
   // Endpoint to process a single subscription by ID
   router.post('/process-subscription/:id', async (req, res) => {
     const { id } = req.params;
+    
+    // Check if subscription is already being processed
+    if (activeProcessing.has(id)) {
+      const processingData = activeProcessing.get(id);
+      const now = Date.now();
+      
+      // If the processing started less than 5 seconds ago, return the existing request
+      if (now - processingData.startTime < 5000) {
+        logger.warn('Duplicate processing request for same subscription detected', {
+          subscription_id: id,
+          previous_request_time: new Date(processingData.startTime).toISOString(),
+          time_diff_ms: now - processingData.startTime,
+          path: req.path
+        });
+        
+        return res.status(202).json({
+          status: 'processing',
+          message: 'Subscription is already being processed',
+          processing_id: processingData.processingId,
+          subscription_id: id
+        });
+      }
+    }
+    
+    // Track this request
+    activeProcessing.set(id, {
+      startTime: Date.now(),
+      path: req.path
+    });
+    
     logger.debug('Process subscription request received', { 
       subscription_id: id,
       body: req.body,
@@ -348,6 +381,13 @@ function createProcessRouter(subscriptionProcessor) {
         // First, create or update a processing record in the database to mark this subscription as queued
         const processingId = await createProcessingRecord(subscriptionProcessor.pool, id);
         
+        // Store processing ID in the active processing map
+        activeProcessing.set(id, {
+          startTime: Date.now(),
+          path: req.path,
+          processingId: processingId
+        });
+        
         // Return response to client immediately with 202 Accepted status
         logger.info('Subscription queued for processing, returning 202 Accepted', { 
           subscription_id: id,
@@ -378,6 +418,9 @@ function createProcessRouter(subscriptionProcessor) {
               processing_id: processingId,
               result_status: result?.status || 'unknown'
             });
+            
+            // Remove from active processing map
+            activeProcessing.delete(id);
           } catch (asyncError) {
             logger.error('Error in async subscription processing', {
               subscription_id: id,
@@ -400,6 +443,9 @@ function createProcessRouter(subscriptionProcessor) {
                 processing_id: processingId,
                 error: updateError.message
               });
+            } finally {
+              // Remove from active processing map even on error
+              activeProcessing.delete(id);
             }
           }
         });
@@ -440,10 +486,18 @@ function createProcessRouter(subscriptionProcessor) {
 
   /**
    * Process a subscription - API handler
+   * This is a legacy endpoint for backward compatibility
    */
   router.post('/:id', async (req, res) => {
     const { id } = req.params;
     const logger = getLogger('subscription-process-endpoint');
+    
+    // Redirect to the standard endpoint
+    logger.info('Legacy endpoint called, redirecting to standard endpoint', {
+      subscription_id: id,
+      original_path: req.path,
+      redirecting_to: `/process-subscription/${id}`
+    });
     
     logger.info('Received subscription processing request', {
       subscription_id: id,
@@ -475,18 +529,86 @@ function createProcessRouter(subscriptionProcessor) {
       });
     }
     
-    try {
-      // Process the subscription
-      const result = await subscriptionProcessor.processSubscription(id);
+    // Check if subscription is already being processed
+    if (activeProcessing.has(id)) {
+      const processingData = activeProcessing.get(id);
       
-      logger.info('Subscription processing initiated successfully', {
+      logger.info('Subscription is already being processed, returning existing processing info', {
         subscription_id: id,
-        result: JSON.stringify(result)
+        processing_id: processingData.processingId,
+        started_at: new Date(processingData.startTime).toISOString()
       });
       
-      return res.json(result);
+      return res.status(202).json({
+        status: 'processing',
+        message: 'Subscription is already being processed',
+        processing_id: processingData.processingId,
+        subscription_id: id
+      });
+    }
+    
+    try {
+      // Create a processing record first
+      const processingId = await createProcessingRecord(subscriptionProcessor.pool, id);
+      
+      // Store in active processing map
+      activeProcessing.set(id, {
+        startTime: Date.now(),
+        path: req.path,
+        processingId: processingId
+      });
+      
+      // Process the subscription asynchronously after sending the response
+      setImmediate(async () => {
+        try {
+          const result = await subscriptionProcessor.processSubscription(id);
+          
+          logger.info('Async processing from legacy endpoint completed', {
+            subscription_id: id,
+            processing_id: processingId,
+            result_status: result?.status || 'unknown'
+          });
+          
+          // Remove from active processing map
+          activeProcessing.delete(id);
+        } catch (asyncError) {
+          logger.error('Error in async subscription processing', {
+            subscription_id: id,
+            processing_id: processingId,
+            error: asyncError.message,
+            stack: asyncError.stack
+          });
+          
+          // Update the processing record to indicate an error occurred
+          try {
+            await updateProcessingStatus(
+              subscriptionProcessor.pool,
+              processingId,
+              'error',
+              { error: asyncError.message }
+            );
+          } catch (updateError) {
+            logger.error('Failed to update processing status after error', {
+              subscription_id: id,
+              processing_id: processingId,
+              error: updateError.message
+            });
+          } finally {
+            // Remove from active processing map even on error
+            activeProcessing.delete(id);
+          }
+        }
+      });
+      
+      // Return accepted response to client
+      return res.status(202).json({
+        status: 'success',
+        message: 'Subscription queued for processing',
+        processing_id: processingId,
+        subscription_id: id
+      });
     } catch (error) {
-      logger.error('Error processing subscription', {
+      logger.error('Error queueing subscription', {
         subscription_id: id,
         error: error.message,
         stack: error.stack

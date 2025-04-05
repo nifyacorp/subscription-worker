@@ -1,3 +1,7 @@
+/**
+ * Subscription Worker
+ * Main application entry point
+ */
 const express = require('express');
 const expressPino = require('express-pino-logger');
 const { promisify } = require('util');
@@ -7,19 +11,24 @@ const { getLogger } = require('./config/logger');
 const { initializePool } = require('./config/database');
 const { getSecret, initialize: initializeSecrets } = require('./config/secrets');
 const { initializePubSub } = require('./config/pubsub');
-const SubscriptionProcessor = require('./services/subscription');
-const createBOERouter = require('./routes/boe');
-const createHealthRouter = require('./routes/health'); 
-const createSubscriptionRouter = require('./routes/subscriptions/index');
-const createDebugRouter = require('./routes/debug');
+const SubscriptionProcessor = require('./services/subscription/index');
+const createApiRouter = require('./routes/api');
+const createLegacyRouter = require('./routes/legacy');
+const createHealthRouter = require('./routes/health');
 
 const logger = getLogger('server');
 const expressLogger = expressPino({ logger });
+
+// Import error handlers
+const { errorHandler, notFoundHandler } = require('./middleware/errorHandler');
 
 // Global variables and configuration
 let pool;
 let mockDatabaseMode = false;
 
+/**
+ * Validate required environment variables
+ */
 function validateEnvironment() {
   // Set PROJECT_ID from GOOGLE_CLOUD_PROJECT if not already set
   if (!process.env.PROJECT_ID) {
@@ -31,6 +40,11 @@ function validateEnvironment() {
   }
 }
 
+/**
+ * Set up graceful shutdown handlers
+ * @param {Object} server - HTTP server instance
+ * @param {Object} pool - Database pool
+ */
 function setupGracefulShutdown(server, pool) {
   // Remove existing listeners
   process.removeAllListeners('SIGTERM');
@@ -59,6 +73,64 @@ function setupGracefulShutdown(server, pool) {
   process.on('SIGINT', () => shutdown('SIGINT'));
 }
 
+/**
+ * Create a mock database pool for development
+ * @returns {Object} Mock database pool
+ */
+function createMockPool() {
+  logger.debug('Creating mock database pool');
+  
+  // Create a mock client that throws clear errors
+  const createMockClient = () => {
+    return {
+      query: () => {
+        throw new Error('Mock database client cannot execute queries. Please ensure PostgreSQL is running.');
+      },
+      release: () => {
+        logger.debug('Mock client released');
+      }
+    };
+  };
+  
+  // Return a mock pool with implementations that will fail gracefully with informative errors
+  return {
+    totalCount: 5,
+    idleCount: 5, 
+    waitingCount: 0,
+    
+    connect: async () => {
+      logger.debug('Mock database connect called');
+      if (Math.random() < 0.3) {
+        // Sometimes throw to simulate transient errors
+        throw new Error('Mock database connection temporarily unavailable (simulated error)');
+      }
+      return createMockClient();
+    },
+    
+    query: async () => {
+      logger.debug('Mock database query called');
+      throw new Error('Mock database pool cannot execute queries. Please ensure PostgreSQL is running.');
+    },
+    
+    on: (event, callback) => {
+      logger.debug(`Mock pool registered event listener for: ${event}`);
+      return this;
+    },
+    
+    end: async () => {
+      logger.debug('Mock pool end called');
+      return Promise.resolve();
+    },
+    
+    // Flag to identify this as a mock pool
+    _mockPool: true
+  };
+}
+
+/**
+ * Start the server
+ * @returns {Promise<Object>} Server and pool instances
+ */
 async function startServer() {
   try {
     validateEnvironment();
@@ -124,6 +196,7 @@ async function startServer() {
     app.use(expressLogger);
     app.use(express.json());
 
+    // Get parser API key from secrets
     let parserApiKey;
     try {
       parserApiKey = await getSecret('PARSER_API_KEY');
@@ -133,14 +206,15 @@ async function startServer() {
       parserApiKey = null;
     }
 
+    // Initialize subscription processor
     const subscriptionProcessor = new SubscriptionProcessor(pool, parserApiKey);
     logger.info('Subscription processor initialized');
 
-    // Add middleware to check mock database status before registering routes
+    // Add middleware to check mock database status for critical endpoints
     app.use((req, res, next) => {
       if (mockDatabaseMode && 
-          (req.path.includes('/process-subscription') || 
-           req.path.includes('/process-subscriptions'))) {
+          (req.path.includes('/process') || 
+           req.path.includes('/batch'))) {
         logger.warn('Attempt to process subscription with mock database', {
           path: req.path,
           method: req.method
@@ -155,37 +229,43 @@ async function startServer() {
       next();
     });
 
-    // Register routes
+    // Register route handlers
+    
+    // Mount health check route at root level
     app.use(createHealthRouter(pool));
     
-    // Mount subscription router at both root and /subscriptions path for backward compatibility
-    const subscriptionRouter = createSubscriptionRouter(subscriptionProcessor);
-    app.use(subscriptionRouter); // Direct routes like /process-subscription/:id
-    app.use('/subscriptions', subscriptionRouter); // Nested routes like /subscriptions/process-subscription/:id
+    // Mount API routes
+    app.use('/api', createApiRouter({ 
+      subscriptionProcessor, 
+      pool, 
+      parserApiKey 
+    }));
     
-    app.use('/boe', createBOERouter(parserApiKey));
+    // Mount legacy routes for backward compatibility
+    app.use(createLegacyRouter({ subscriptionProcessor }));
     
-    // Register debug routes (protected by NODE_ENV check to prevent access in production)
-    if (process.env.NODE_ENV !== 'production' || process.env.ENABLE_DEBUG_ROUTES === 'true') {
-      app.use('/debug', createDebugRouter(subscriptionProcessor, pool));
-      logger.info('Debug routes registered');
-    }
+    // Forward root level requests to API paths
+    app.use((req, res, next) => {
+      // Skip if this is already an API or special path
+      if (req.path.startsWith('/api/') || 
+          req.path === '/' || 
+          req.path === '/health' || 
+          req.path === '/_health') {
+        return next();
+      }
+      
+      logger.debug(`Redirecting non-API request to API path: ${req.path} -> /api${req.path}`);
+      req.url = `/api${req.path}`;
+      next('route');
+    });
     
     logger.info('Routes registered');
 
-    // Add error handling middleware
-    app.use((err, req, res, next) => {
-      logger.error({ 
-        error: err,
-        url: req.url,
-        method: req.method
-      }, 'Unhandled error in request');
-      
-      res.status(500).json({
-        error: 'Internal server error',
-        message: process.env.NODE_ENV === 'development' ? err.message : undefined
-      });
-    });
+    // Add 404 handler for unmatched routes
+    app.use(notFoundHandler);
+
+    // Add comprehensive error handling middleware
+    app.use(errorHandler);
 
     // Start server
     const port = process.env.PORT || 8080;
@@ -211,65 +291,6 @@ async function startServer() {
   }
 }
 
-/**
- * Creates a mock database pool for development mode when real database is unavailable
- * This mock pool provides appropriate mock implementations and clear error messages
- * @returns {Object} A mock pool that simulates a Postgres pool
- */
-function createMockPool() {
-  logger.debug('Creating mock database pool');
-  
-  // Create a mock client that throws clear errors
-  const createMockClient = () => {
-    return {
-      query: () => {
-        throw new Error('Mock database client cannot execute queries. Please ensure PostgreSQL is running.');
-      },
-      release: () => {
-        logger.debug('Mock client released');
-      }
-    };
-  };
-  
-  // Return a mock pool with implementations that will fail gracefully with informative errors
-  return {
-    totalCount: 5,
-    idleCount: 5, 
-    waitingCount: 0,
-    
-    connect: async () => {
-      logger.debug('Mock database connect called');
-      if (Math.random() < 0.3) {
-        // Sometimes throw to simulate transient errors
-        throw new Error('Mock database connection temporarily unavailable (simulated error)');
-      }
-      return createMockClient();
-    },
-    
-    query: async () => {
-      logger.debug('Mock database query called');
-      throw new Error('Mock database pool cannot execute queries. Please ensure PostgreSQL is running.');
-    },
-    
-    on: (event, callback) => {
-      logger.debug(`Mock pool registered event listener for: ${event}`);
-      // If it's an error event, we could simulate by calling the callback
-      // if (event === 'error' && Math.random() < 0.1) {
-      //   callback(new Error('Mock pool simulated error'));
-      // }
-      return this;
-    },
-    
-    end: async () => {
-      logger.debug('Mock pool end called');
-      return Promise.resolve();
-    },
-    
-    // Flag to identify this as a mock pool
-    _mockPool: true
-  };
-}
-
 // Global error handlers
 const handleFatalError = (error, type) => {
   logger.fatal({
@@ -287,4 +308,5 @@ const handleFatalError = (error, type) => {
 process.on('uncaughtException', (error) => handleFatalError(error, 'uncaughtException'));
 process.on('unhandledRejection', (error) => handleFatalError(error, 'unhandledRejection'));
 
+// Start the application
 startServer();
