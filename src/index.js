@@ -22,6 +22,7 @@ const ProcessTrackingRepository = require('./repositories/ProcessTrackingReposit
 
 // Clients
 const ParserClient = require('./clients/ParserClient');
+const NotificationClient = require('./clients/NotificationClient');
 
 const logger = getLogger('server');
 const expressLogger = expressPino({ logger });
