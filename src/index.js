@@ -16,12 +16,12 @@ const createLegacyRouter = require('./routes/legacy');
 const createHealthRouter = require('./routes/health');
 
 // Repositories
-const SubscriptionRepository = require('./src/repositories/SubscriptionRepository');
-const NotificationRepository = require('./src/repositories/NotificationRepository');
-const ProcessTrackingRepository = require('./src/repositories/ProcessTrackingRepository');
+const SubscriptionRepository = require('./repositories/SubscriptionRepository');
+const NotificationRepository = require('./repositories/NotificationRepository');
+const ProcessTrackingRepository = require('./repositories/ProcessTrackingRepository');
 
 // Clients
-const ParserClient = require('./src/clients/ParserClient');
+const ParserClient = require('./clients/ParserClient');
 
 const logger = getLogger('server');
 const expressLogger = expressPino({ logger });
@@ -135,165 +135,164 @@ function createMockPool() {
 }
 
 /**
+ * Registers application routes.
+ */
+function registerRoutes(app, dependencies) {
+    logger.info('Registering application routes...');
+    const { 
+        pool, 
+        subscriptionController, 
+        parserApiKey 
+    } = dependencies;
+
+    // Health Check
+    app.use(createHealthRouter(pool));
+    logger.debug('Registered health routes.');
+
+    // API Routes
+    app.use('/api', createApiRouter({ subscriptionController, parserApiKey, pool })); 
+    logger.debug('Registered API routes under /api.');
+
+    // Legacy Routes (Commented out)
+    // app.use(createLegacyRouter({ parserApiKey })); 
+    // logger.debug('Legacy routes registration skipped.');
+
+    // Forward root level requests (Adjust if needed)
+    app.use((req, res, next) => {
+      if (req.path.startsWith('/api/') || req.path === '/' || req.path === '/health' || req.path === '/_health') {
+        return next();
+      }
+      logger.debug(`Redirecting non-API request: ${req.path} -> /api${req.path}`);
+      req.url = `/api${req.path}`;
+      next('route');
+    });
+
+    logger.info('Application routes registered.');
+}
+
+/**
+ * Registers global error handlers.
+ */
+function registerErrorHandlers(app) {
+    logger.info('Registering error handlers...');
+    // 404 Handler
+    app.use(notFoundHandler);
+    // Generic Error Handler
+    app.use(errorHandler);
+    logger.info('Global error handlers registered.');
+}
+
+/**
  * Start the server
- * @returns {Promise<Object>} Server and pool instances
  */
 async function startServer() {
-  try {
-    validateEnvironment();
-    
-    logger.debug({
-      phase: 'startup',
-      node_env: process.env.NODE_ENV,
-      project_id: process.env.PROJECT_ID || process.env.GOOGLE_CLOUD_PROJECT,
-      parser_base_url: process.env.PARSER_BASE_URL,
-      log_level: process.env.LOG_LEVEL
-    }, 'Starting server with environment configuration');
+  let pool;
+  let server;
+  let mockDatabaseMode = false;
 
-    // Initialize Secret Manager
+  try {
+    logger.info('--- Starting Subscription Worker ---');
+    validateEnvironment();
+    const projectId = process.env.PROJECT_ID;
+
+    // Init Secrets
     logger.debug('Initializing Secret Manager');
     await initializeSecrets();
     logger.debug('Secret Manager initialized');
 
-    // Initialize PubSub
-    logger.debug('Initializing PubSub');
-    const pubsubConfig = await initializePubSub();
-    logger.debug('PubSub initialized');
+    // Init PubSub (for NotificationClient)
+    logger.debug('Initializing PubSub infrastructure');
+    const pubsubConfig = await initializePubSub(); // Assume this returns necessary config or client instance
+    logger.debug('PubSub infrastructure initialized');
 
-    // Check if we're in development mode
-    const isDevelopment = process.env.NODE_ENV === 'development' || !process.env.NODE_ENV;
-    
-    // Initialize database connection pool
+    // Init DB
     logger.debug('Initializing database pool');
     try {
       pool = await initializePool();
-      
-      // Test the database connection
-      const client = await pool.connect();
-      client.release();
+      const client = await pool.connect(); client.release();
       logger.info('Successfully connected to database');
     } catch (dbError) {
-      logger.warn('Failed to connect to database', {
-        code: dbError.code,
-        phase: 'database_initialization',
-        error: dbError.message,
-        environment: process.env.NODE_ENV
-      });
-      
-      // In development, create a mock pool for non-critical operations
-      if (isDevelopment) {
+      logger.warn('Failed to connect to database', { error: dbError.message, code: dbError.code });
+      if (process.env.NODE_ENV === 'development') {
         mockDatabaseMode = true;
         pool = createMockPool();
-        logger.info('Created mock database pool for development mode');
+        logger.info('Created mock database pool for development');
       } else {
-        // In production, we should not continue without a database
-        logger.error('Database connection is required in production mode', {
-          error: dbError.message
-        });
+        logger.error('Database connection required in production mode', { error: dbError.message });
         throw dbError;
       }
     }
+
+    // --- Dependency Injection Setup ---
+    logger.info('Instantiating application components...');
     
-    // Initialize Express app
+    // Clients
+    const parserClient = new ParserClient({}); // Add config if needed
+    // NotificationClient might need pubsubConfig or projectId
+    const notificationClient = new NotificationClient({ projectId, pubsubClient: pubsubConfig?.pubSubClient /* adjust based on initializePubSub */ }); 
+
+    // Repositories
+    const subscriptionRepository = new SubscriptionRepository(pool);
+    const notificationRepository = new NotificationRepository(pool);
+    const processTrackingRepository = new ProcessTrackingRepository(pool);
+
+    // Service
+    const subscriptionService = new SubscriptionService({
+        subscriptionRepository,
+        notificationRepository,
+        parserClient, // Inject the client instance
+        notificationClient,
+        logger: getLogger('subscription-service') // Inject specific logger
+    });
+
+    // Controller
+    const subscriptionController = new SubscriptionController({
+        subscriptionService,
+        processTrackingRepository
+    });
+
+    // Collect dependencies needed for routing
+    const routeDependencies = {
+        pool,
+        subscriptionController,
+        // Add parserApiKey if createApiRouter or others need it directly
+        // parserApiKey: await getSecret('PARSER_API_KEY').catch(() => null) 
+    };
+    logger.info('Application components instantiated.');
+
+    // --- Setup Express App ---
     const app = express();
-    
-    // Store mock database mode in app state
     app.locals.mockDatabaseMode = mockDatabaseMode;
-    
     app.use(expressLogger);
     app.use(express.json());
-
-    // Get parser API key from secrets
-    let parserApiKey;
-    try {
-      parserApiKey = await getSecret('PARSER_API_KEY');
-      logger.debug('Parser API key retrieved');
-    } catch (error) {
-      logger.warn('Parser API key not found, continuing without it');
-      parserApiKey = null;
-    }
-
-    // Initialize subscription processor
-    const subscriptionProcessor = new SubscriptionProcessor(pool, parserApiKey);
-    logger.info('Subscription processor initialized');
-
-    // Add middleware to check mock database status for critical endpoints
+    
+    // Middleware to check mock DB status (keep if needed)
     app.use((req, res, next) => {
-      if (mockDatabaseMode && 
-          (req.path.includes('/process') || 
-           req.path.includes('/batch'))) {
-        logger.warn('Attempt to process subscription with mock database', {
-          path: req.path,
-          method: req.method
-        });
-        return res.status(503).json({
-          status: 'error',
-          error: 'Database unavailable',
-          message: 'The subscription worker is running in mock database mode. Please ensure PostgreSQL is running and accessible.',
-          request_path: req.path
-        });
+      if (mockDatabaseMode && (req.path.includes('/process') || req.path.includes('/batch'))) {
+        logger.warn('Attempt to use DB-dependent endpoint in mock mode', { path: req.path });
+        return res.status(503).json({ status: 'error', error: 'Database unavailable in mock mode' });
       }
       next();
     });
 
-    // Register route handlers
+    // Register Routes
+    registerRoutes(app, routeDependencies);
     
-    // Mount health check route at root level
-    app.use(createHealthRouter(pool));
-    
-    // Mount API routes
-    app.use('/api', createApiRouter({ 
-      subscriptionProcessor, 
-      pool, 
-      parserApiKey 
-    }));
-    
-    // Mount legacy routes for backward compatibility
-    app.use(createLegacyRouter({ subscriptionProcessor }));
-    
-    // Forward root level requests to API paths
-    app.use((req, res, next) => {
-      // Skip if this is already an API or special path
-      if (req.path.startsWith('/api/') || 
-          req.path === '/' || 
-          req.path === '/health' || 
-          req.path === '/_health') {
-        return next();
-      }
-      
-      logger.debug(`Redirecting non-API request to API path: ${req.path} -> /api${req.path}`);
-      req.url = `/api${req.path}`;
-      next('route');
-    });
-    
-    logger.info('Routes registered');
+    // Register Error Handlers (must be last)
+    registerErrorHandlers(app);
 
-    // Add 404 handler for unmatched routes
-    app.use(notFoundHandler);
-
-    // Add comprehensive error handling middleware
-    app.use(errorHandler);
-
-    // Start server
+    // --- Start Server ---
     const port = process.env.PORT || 8080;
-    const server = app.listen(port, () => {
-      logger.info({ 
-        phase: 'server_started',
-        port,
-        node_env: process.env.NODE_ENV,
-        project_id: process.env.PROJECT_ID,
-        mode: isDevelopment ? 'development' : 'production'
-      }, 'Server started successfully');
+    server = app.listen(port, () => {
+      logger.info({ port, node_env: process.env.NODE_ENV }, `Server listening on port ${port}`);
     });
     
     setupGracefulShutdown(server, pool);
-    
-    return { server, pool };
+    logger.info('--- Subscription Worker Started Successfully ---');
+
   } catch (error) {
-    logger.error('Failed to start server', {
-      error,
-      stack: error.stack
-    });
+    logger.fatal({ phase: 'server_startup_failed', error: error.message, stack: error.stack }, 'Fatal error during server startup.');
+    if (pool && typeof pool.end === 'function') { try { await pool.end(); } catch (e) { logger.error('Error closing pool during failed startup', e); } }
     process.exit(1);
   }
 }
