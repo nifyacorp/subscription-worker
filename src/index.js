@@ -11,10 +11,17 @@ const { getLogger } = require('./config/logger');
 const { initializePool } = require('./config/database');
 const { getSecret, initialize: initializeSecrets } = require('./config/secrets');
 const { initializePubSub } = require('./config/pubsub');
-const SubscriptionProcessor = require('./services/subscription/index');
 const createApiRouter = require('./routes/api');
 const createLegacyRouter = require('./routes/legacy');
 const createHealthRouter = require('./routes/health');
+
+// Repositories
+const SubscriptionRepository = require('./src/repositories/SubscriptionRepository');
+const NotificationRepository = require('./src/repositories/NotificationRepository');
+const ProcessTrackingRepository = require('./src/repositories/ProcessTrackingRepository');
+
+// Clients
+const ParserClient = require('./src/clients/ParserClient');
 
 const logger = getLogger('server');
 const expressLogger = expressPino({ logger });
