@@ -28,7 +28,6 @@ const SubscriptionController = require('./src/controllers/SubscriptionController
 // Routers
 const createApiRouter = require('./src/routes/api'); // Assuming a top-level API router
 const createHealthRouter = require('./src/routes/health'); 
-const createDebugRouter = require('./src/routes/debug'); // Keep debug if needed, adjust dependencies
 
 // --- Initialization ---
 const logger = getLogger('server');
