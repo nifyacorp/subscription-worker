@@ -10,7 +10,7 @@ require('dotenv').config();
 const { getLogger, expressLogger } = require('./config/logger');
 const { initializePool } = require('./config/database');
 const { getSecret, initialize: initializeSecrets } = require('./config/secrets');
-const { initializePubSub, NotificationClient } = require('./config/pubsub');
+const { initializePubSub } = require('./config/pubsub');
 const createApiRouter = require('./routes/api');
 const createLegacyRouter = require('./routes/legacy');
 const createHealthRouter = require('./routes/health');
