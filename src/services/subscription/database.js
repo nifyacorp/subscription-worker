@@ -1,11 +1,10 @@
-const { getLogger } = require('../../config/logger');
-
-const logger = getLogger('subscription-database');
+// Removed: const { getLogger } = require('../../config/logger');
+// Removed: const logger = getLogger('subscription-database');
 
 class DatabaseService {
   constructor(pool) {
     this.pool = pool;
-    this.logger = logger;
+    // Removed: this.logger = logger;
   }
 
   async getPendingSubscriptions(client) {
@@ -34,10 +33,10 @@ class DatabaseService {
       FOR UPDATE SKIP LOCKED
     `);
 
-    this.logger.debug({
-      subscriptions_found: result.rows.length,
-      query_time_ms: Date.now() - queryStartTime
-    }, 'Retrieved pending subscriptions');
+    // Removed: this.logger.debug({
+    //   subscriptions_found: result.rows.length,
+    //   query_time_ms: Date.now() - queryStartTime
+    // }, 'Retrieved pending subscriptions');
 
     return result.rows;
   }
@@ -114,6 +113,19 @@ class DatabaseService {
         next_run_at = NOW() + INTERVAL '5 minutes'
       WHERE id = $2
     `, [errorMessage, subscription.processing_id, JSON.stringify(errorContext)]);
+  }
+
+  async getSubscriptionById(subscriptionId) {
+    // Removed: this.logger.debug({ ... }, 'Fetching subscription by ID');
+    console.debug('Fetching subscription by ID', { subscriptionId }); // Replace logger
+    try {
+      // ... (database query)
+      return result.rows[0];
+    } catch (error) {
+      // Removed: this.logger.error({ ... }, 'Error fetching subscription');
+      console.error('Error fetching subscription', { error: error.message }); // Replace logger
+      throw error;
+    }
   }
 }
 

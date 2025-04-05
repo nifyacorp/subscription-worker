@@ -4,9 +4,6 @@ const {
   ProcessingRequestSchema,
   PubSubNotificationSchema  
 } = require('../types/schemas');
-const { getLogger } = require('../config/logger');
-
-const logger = getLogger('validation');
 
 /**
  * Sanitize subscription data
@@ -68,7 +65,7 @@ function validateSubscription(subscription) {
     const result = SubscriptionSchema.safeParse(sanitized);
     
     if (!result.success) {
-      logger.warn('Subscription validation failed', {
+      console.warn('Subscription validation failed', {
         subscription_id: sanitized.subscription_id || sanitized.id,
         errors: result.error.format()
       });
@@ -87,7 +84,7 @@ function validateSubscription(subscription) {
       errors: null
     };
   } catch (error) {
-    logger.error('Error in subscription validation', {
+    console.error('Error in subscription validation', {
       error: error.message,
       stack: error.stack
     });
@@ -110,7 +107,7 @@ function validateProcessorResult(result) {
     const parsedResult = ProcessorResultSchema.safeParse(result);
     
     if (!parsedResult.success) {
-      logger.warn('Processor result validation failed', {
+      console.warn('Processor result validation failed', {
         errors: parsedResult.error.format()
       });
       
@@ -127,7 +124,7 @@ function validateProcessorResult(result) {
       errors: null
     };
   } catch (error) {
-    logger.error('Error in processor result validation', {
+    console.error('Error in processor result validation', {
       error: error.message,
       stack: error.stack
     });
@@ -150,7 +147,7 @@ function validateProcessingRequest(request) {
     const parsedRequest = ProcessingRequestSchema.safeParse(request);
     
     if (!parsedRequest.success) {
-      logger.warn('Processing request validation failed', {
+      console.warn('Processing request validation failed', {
         errors: parsedRequest.error.format()
       });
       
@@ -167,7 +164,7 @@ function validateProcessingRequest(request) {
       errors: null
     };
   } catch (error) {
-    logger.error('Error in processing request validation', {
+    console.error('Error in processing request validation', {
       error: error.message,
       stack: error.stack
     });
@@ -190,7 +187,7 @@ function validatePubSubNotification(message) {
     const parsedMessage = PubSubNotificationSchema.safeParse(message);
     
     if (!parsedMessage.success) {
-      logger.warn('PubSub notification validation failed', {
+      console.warn('PubSub notification validation failed', {
         processor_type: message?.processor_type,
         trace_id: message?.trace_id,
         errors: parsedMessage.error.format()
@@ -209,7 +206,7 @@ function validatePubSubNotification(message) {
       errors: null
     };
   } catch (error) {
-    logger.error('Error in PubSub notification validation', {
+    console.error('Error in PubSub notification validation', {
       error: error.message,
       stack: error.stack,
       processor_type: message?.processor_type

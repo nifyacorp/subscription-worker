@@ -1,12 +1,9 @@
-const { getLogger } = require('../config/logger');
-
 class ProcessTrackingRepository {
     constructor(pool) {
         if (!pool) {
             throw new Error('ProcessTrackingRepository requires a database pool.');
         }
         this.pool = pool;
-        this.logger = getLogger('process-tracking-repository');
     }
 
     /**
@@ -17,7 +14,7 @@ class ProcessTrackingRepository {
      * @returns {Promise<Object>} The created processing record (including its ID).
      */
     async createRecord(subscriptionId, initialStatus = 'pending', initialMetadata = {}) {
-        this.logger.debug('Creating processing record', { subscription_id: subscriptionId, status: initialStatus });
+        console.debug('Creating processing record', { subscription_id: subscriptionId });
         const metadata = { 
             ...initialMetadata, 
             queued_at: new Date().toISOString() 
@@ -36,17 +33,13 @@ class ProcessTrackingRepository {
             );
 
             if (result.rowCount === 0) {
-                this.logger.error('Failed to insert processing record', { subscription_id: subscriptionId });
+                console.error('Failed to insert processing record', { subscription_id: subscriptionId });
                 throw new Error('Processing record creation failed in DB.');
             }
-            this.logger.info('Created processing record successfully', { processing_id: result.rows[0].id, subscription_id: subscriptionId });
+            console.info('Created processing record successfully', { processing_id: result.rows[0].id });
             return result.rows[0];
         } catch (error) {
-            this.logger.error('Error creating processing record in database', {
-                subscription_id: subscriptionId,
-                error: error.message,
-                code: error.code
-            });
+            console.error('Error creating processing record in database', { error: error.message });
             throw error;
         }
     }
@@ -59,7 +52,7 @@ class ProcessTrackingRepository {
      * @returns {Promise<Object>} The updated processing record.
      */
     async updateRecordStatus(processingId, status, metadataUpdates = {}) {
-        this.logger.debug('Updating processing record status', { processing_id: processingId, status: status });
+        console.debug('Updating processing record status', { processing_id: processingId, status: status });
         const updateTime = new Date().toISOString();
         const metadata = { 
             ...metadataUpdates, 
@@ -95,19 +88,14 @@ class ProcessTrackingRepository {
             const result = await this.pool.query(query, queryParams);
 
             if (result.rowCount === 0) {
-                this.logger.warn('Processing record not found for status update', { processing_id: processingId });
+                console.warn('Processing record not found for status update', { processing_id: processingId });
                 // Decide if this should throw an error or return null
                 throw new Error(`Processing record not found: ${processingId}`);
             }
-            this.logger.info('Updated processing record status successfully', { processing_id: processingId, status: status });
+            console.info('Updated processing record status successfully', { processing_id: processingId, status: status });
             return result.rows[0];
         } catch (error) {
-            this.logger.error('Error updating processing record status in database', {
-                processing_id: processingId,
-                status: status,
-                error: error.message,
-                code: error.code
-            });
+            console.error('Error updating processing record status in database', { error: error.message });
             throw error;
         }
     }
@@ -117,7 +105,7 @@ class ProcessTrackingRepository {
      * @returns {Promise<Array<Object>>} A list of pending processing records.
      */
     async findPendingRecords() {
-        this.logger.debug('Finding pending subscription processing records');
+        console.debug('Finding pending subscription processing records');
         try {
             // Query based on the one from the original route, adjust as needed
              const result = await this.pool.query(`
@@ -145,13 +133,10 @@ class ProcessTrackingRepository {
                 ORDER BY sp.next_run_at ASC
             `);
             
-            this.logger.info(`Found ${result.rowCount} pending processing records.`);
+            console.info(`Found ${result.rowCount} pending processing records.`);
             return result.rows;
         } catch (error) {
-            this.logger.error('Error fetching pending processing records', {
-                error: error.message,
-                code: error.code
-            });
+            console.error('Error fetching pending processing records', { error: error.message });
             throw error;
         }
     }

@@ -1,6 +1,4 @@
 const express = require('express');
-const { getLogger } = require('../config/logger');
-const logger = getLogger('debug-controller');
 
 function createDebugRouter(subscriptionProcessor, pool) {
   const router = express.Router();
@@ -11,12 +9,7 @@ function createDebugRouter(subscriptionProcessor, pool) {
       const { type } = req.params;
       const { prompts, subscription_id, user_id } = req.body;
 
-      logger.info('Test processor request received', {
-        processor_type: type,
-        prompts: prompts,
-        subscription_id: subscription_id,
-        user_id: user_id
-      });
+      console.info('Test processor request received', { processor_type: type });
 
       // Validate inputs
       if (!type) {
@@ -74,10 +67,7 @@ function createDebugRouter(subscriptionProcessor, pool) {
         result
       });
     } catch (error) {
-      logger.error('Error in test processor endpoint', {
-        error: error.message,
-        stack: error.stack
-      });
+      console.error('Error in test processor endpoint', { error: error.message });
 
       return res.status(500).json({
         status: 'error',
@@ -113,11 +103,6 @@ function createDebugRouter(subscriptionProcessor, pool) {
         available_processors: Object.keys(subscriptionProcessor.processorMap)
       });
     } catch (error) {
-      logger.error('Error getting processor status', {
-        error: error.message,
-        stack: error.stack
-      });
-
       return res.status(500).json({
         status: 'error',
         error: error.message
@@ -128,7 +113,7 @@ function createDebugRouter(subscriptionProcessor, pool) {
   // Debug endpoint to get a list of pending subscriptions
   router.get('/pending-subscriptions', async (req, res) => {
     try {
-      logger.debug('Fetching pending subscriptions for debug');
+      console.debug('Fetching pending subscriptions for debug');
       
       const client = await pool.connect();
       
@@ -167,7 +152,7 @@ function createDebugRouter(subscriptionProcessor, pool) {
         client.release();
       }
     } catch (error) {
-      logger.error('Error fetching pending subscriptions', {
+      console.error('Error fetching pending subscriptions', {
         error: error.message,
         stack: error.stack
       });
@@ -184,7 +169,7 @@ function createDebugRouter(subscriptionProcessor, pool) {
     try {
       const { id } = req.params;
       
-      logger.info('Manual subscription processing requested', {
+      console.info('Manual subscription processing requested', {
         subscription_id: id
       });
 
@@ -203,7 +188,7 @@ function createDebugRouter(subscriptionProcessor, pool) {
         result
       });
     } catch (error) {
-      logger.error('Error processing subscription manually', {
+      console.error('Error processing subscription manually', {
         error: error.message,
         stack: error.stack
       });
@@ -220,7 +205,7 @@ function createDebugRouter(subscriptionProcessor, pool) {
     let client = null;
     
     try {
-      logger.debug('Checking database connection status');
+      console.debug('Checking database connection status');
       
       // Try to get a client from the pool
       client = await pool.connect();
@@ -239,7 +224,7 @@ function createDebugRouter(subscriptionProcessor, pool) {
         }
       });
     } catch (error) {
-      logger.error('Database connection test failed', {
+      console.error('Database connection test failed', {
         error: error.message,
         code: error.code
       });
@@ -269,7 +254,7 @@ function createDebugRouter(subscriptionProcessor, pool) {
         });
       }
       
-      logger.debug('Fetching logs for subscription', {
+      console.debug('Fetching logs for subscription', {
         subscription_id: id
       });
       
@@ -341,7 +326,7 @@ function createDebugRouter(subscriptionProcessor, pool) {
         client.release();
       }
     } catch (error) {
-      logger.error('Error fetching subscription logs', {
+      console.error('Error fetching subscription logs', {
         error: error.message,
         stack: error.stack
       });
@@ -356,7 +341,7 @@ function createDebugRouter(subscriptionProcessor, pool) {
   // Check for stuck or failed subscriptions
   router.get('/stuck-subscriptions', async (req, res) => {
     try {
-      logger.debug('Checking for stuck or failed subscriptions');
+      console.debug('Checking for stuck or failed subscriptions');
       
       const client = await pool.connect();
       
@@ -399,7 +384,7 @@ function createDebugRouter(subscriptionProcessor, pool) {
         client.release();
       }
     } catch (error) {
-      logger.error('Error checking for stuck subscriptions', {
+      console.error('Error checking for stuck subscriptions', {
         error: error.message,
         stack: error.stack
       });

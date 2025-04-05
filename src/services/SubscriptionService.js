@@ -8,7 +8,6 @@
 
 const crypto = require('crypto');
 const { ParserClient } = require('../utils/parser-protocol'); // This path will be updated
-const { getLogger } = require('../config/logger'); // This path will be updated
 
 // Constants - these might move to config later
 const DEFAULT_PROMPTS = ['Información general', 'Noticias importantes'];
@@ -25,19 +24,17 @@ class SubscriptionService {
    * @param {Object} options.notificationRepository - Repository for notification data
    * @param {Object} options.parserClient - Client for interacting with the parser service
    * @param {Object} options.notificationClient - Client for publishing notifications (e.g., PubSub)
-   * @param {Object} options.logger - Logger instance
    */
-  constructor({ subscriptionRepository, notificationRepository, parserClient, notificationClient, logger }) {
-    if (!subscriptionRepository || !notificationRepository || !parserClient || !logger) {
+  constructor({ subscriptionRepository, notificationRepository, parserClient, notificationClient }) {
+    if (!subscriptionRepository || !notificationRepository || !parserClient) {
         throw new Error('Missing required dependencies for SubscriptionService');
     }
     this.subscriptionRepository = subscriptionRepository;
     this.notificationRepository = notificationRepository;
     this.parserClient = parserClient;
-    this.notificationClient = notificationClient; // Optional: Can be null/undefined if not configured
-    this.logger = logger || getLogger('subscription-service'); // Use injected logger or default
+    this.notificationClient = notificationClient;
     
-    this.logger.info('Subscription service initialized');
+    console.info('Subscription service initialized');
   }
   
   /**
@@ -47,7 +44,7 @@ class SubscriptionService {
    */
   async processSubscription(subscriptionId) {
     const traceId = crypto.randomBytes(8).toString('hex');
-    this.logger.info('Processing subscription', { subscription_id: subscriptionId, trace_id: traceId });
+    console.info('Processing subscription', { subscription_id: subscriptionId, trace_id: traceId });
 
     try {
       if (!subscriptionId) {
@@ -69,7 +66,7 @@ class SubscriptionService {
       // 5. Update Subscription Status
       await this._updateSubscriptionStatus(subscriptionId, traceId);
       
-      this.logger.info('Subscription processing completed successfully', {
+      console.info('Subscription processing completed successfully', {
         subscription_id: subscriptionId,
         notifications_created: notificationResult.created,
         errors: notificationResult.errors,
@@ -84,7 +81,7 @@ class SubscriptionService {
         trace_id: traceId
       };
     } catch (error) {
-      this.logger.error('Error processing subscription', {
+      console.error('Error processing subscription', {
         subscription_id: subscriptionId,
         error: error.message,
         stack: error.stack,
@@ -108,15 +105,10 @@ class SubscriptionService {
   async _getSubscriptionData(subscriptionId, traceId) {
     const subscription = await this.subscriptionRepository.findById(subscriptionId);
     if (!subscription) {
-      this.logger.error('Subscription not found', { subscription_id: subscriptionId, trace_id: traceId });
+      console.error('Subscription not found', { subscription_id: subscriptionId });
       throw new Error(`Subscription not found: ${subscriptionId}`);
     }
-    this.logger.info('Retrieved subscription details', {
-      subscription_id: subscriptionId,
-      user_id: subscription.user_id,
-      prompts_count: subscription.prompts?.length || 0,
-      trace_id: traceId
-    });
+    console.info('Retrieved subscription details', { subscription_id: subscriptionId });
     return subscription;
   }
 
@@ -134,15 +126,10 @@ class SubscriptionService {
       }
     );
 
-    this.logger.debug('Sending request to parser', { subscription_id: subscription.id, trace_id: traceId });
+    console.debug('Sending request to parser', { subscription_id: subscription.id });
     const parserResult = await this.parserClient.send(requestData);
 
-    this.logger.info('Parser processing completed', {
-      subscription_id: subscription.id,
-      entries_count: parserResult.entries?.length || 0,
-      status: parserResult.status,
-      trace_id: traceId
-    });
+    console.info('Parser processing completed', { subscription_id: subscription.id, status: parserResult.status });
 
     return parserResult;
   }
@@ -150,7 +137,7 @@ class SubscriptionService {
   /** Validate and normalize subscription prompts */
   _validatePrompts(prompts) {
     if (!prompts || !Array.isArray(prompts) || prompts.length === 0) {
-      this.logger.warn('No valid prompts found, using defaults');
+      console.warn('No valid prompts found, using defaults');
       return DEFAULT_PROMPTS;
     }
     
@@ -165,11 +152,7 @@ class SubscriptionService {
   /** Process parser entries into a standardized match format */
   _processParserEntries(parserResult, originalPrompts, traceId) {
     if (!parserResult || parserResult.status === 'error' || !Array.isArray(parserResult.entries)) {
-      this.logger.warn('No valid parser results to process', {
-        status: parserResult?.status || 'unknown',
-        error: parserResult?.error,
-        trace_id: traceId
-      });
+      console.warn('No valid parser results to process');
       return [];
     }
     
@@ -192,11 +175,7 @@ class SubscriptionService {
         };
       });
       
-    this.logger.debug('Processed parser results into matches', {
-      entries_count: parserResult.entries.length,
-      valid_matches: matches.length,
-      trace_id: traceId
-    });
+    console.debug('Processed parser results into matches', { valid_matches: matches.length });
     
     return matches;
   }
@@ -225,17 +204,13 @@ class SubscriptionService {
   /** Create notifications in the DB and publish events */
   async _handleNotifications(subscription, matches, traceId) {
     if (!matches || matches.length === 0) {
-      this.logger.info('No matches to create notifications for', { subscription_id: subscription.id, trace_id: traceId });
+      console.info('No matches to create notifications for', { subscription_id: subscription.id });
       return { created: 0, errors: 0 };
     }
 
     let notificationsCreated = 0;
     let errors = 0;
-    this.logger.info('Starting notification creation process', {
-      subscription_id: subscription.id,
-      match_count: matches.length,
-      trace_id: traceId
-    });
+    console.info('Starting notification creation process', { match_count: matches.length });
 
     for (const match of matches) {
       try {
@@ -243,12 +218,7 @@ class SubscriptionService {
         
         // 1. Save to Database
         const savedNotification = await this.notificationRepository.create(notificationData);
-        this.logger.info('Saved notification to DB', {
-            notification_id: savedNotification.id,
-            subscription_id: subscription.id,
-            user_id: subscription.user_id,
-            trace_id: traceId
-        });
+        console.info('Saved notification to DB', { notification_id: savedNotification.id });
         notificationsCreated++;
 
         // 2. Publish Event (if client configured)
@@ -268,39 +238,21 @@ class SubscriptionService {
                 trace_id: traceId
             };
             await this.notificationClient.publishNotification(eventData);
-            this.logger.info('Published notification event', { notification_id: savedNotification.id, trace_id: traceId });
+            console.info('Published notification event', { notification_id: savedNotification.id });
           } catch (publishError) {
             errors++; // Count publish error as a partial failure for this match
-            this.logger.warn('Failed to publish notification event', {
-              error: publishError.message,
-              notification_id: savedNotification.id,
-              subscription_id: subscription.id,
-              trace_id: traceId
-            });
+            console.warn('Failed to publish notification event', { error: publishError.message });
             // Decide if this should be a fatal error for the match or just logged
           }
         }
       } catch (dbError) {
         errors++;
-        this.logger.error('Failed to create notification in DB', {
-          subscription_id: subscription.id,
-          user_id: subscription.user_id,
-          error: dbError.message,
-          error_code: dbError.code,
-          stack: dbError.stack?.substring(0, 500),
-          match_title: match.title,
-          trace_id: traceId
-        });
+        console.error('Failed to create notification in DB', { error: dbError.message });
         // Continue to next match
       }
     }
     
-    this.logger.info('Notification creation completed', {
-      subscription_id: subscription.id,
-      notifications_created: notificationsCreated,
-      errors: errors,
-      trace_id: traceId
-    });
+    console.info('Notification creation completed', { created: notificationsCreated, errors: errors });
     return { created: notificationsCreated, errors };
   }
 
@@ -335,14 +287,10 @@ class SubscriptionService {
   async _updateSubscriptionStatus(subscriptionId, traceId) {
     try {
       await this.subscriptionRepository.updateLastProcessed(subscriptionId);
-      this.logger.debug('Updated subscription last_processed_at', { subscription_id: subscriptionId, trace_id: traceId });
+      console.debug('Updated subscription last_processed_at', { subscription_id: subscriptionId });
     } catch (error) {
       // Log error but don't fail the entire operation just for the status update
-      this.logger.error('Failed to update subscription last_processed_at', {
-        subscription_id: subscriptionId,
-        error: error.message,
-        trace_id: traceId
-      });
+      console.error('Failed to update subscription last_processed_at', { error: error.message });
     }
   }
 
@@ -352,7 +300,7 @@ class SubscriptionService {
       // 1. Fetch pending subscription IDs from subscriptionRepository
       // 2. Loop through IDs, calling processSubscription for each
       // 3. Aggregate results
-      this.logger.warn('processPendingSubscriptions method is not fully implemented yet.');
+      console.warn('processPendingSubscriptions method is not fully implemented yet.');
       // Placeholder implementation
       return { status: 'pending', processed: 0, success_count: 0, error_count: 0 }; 
   }

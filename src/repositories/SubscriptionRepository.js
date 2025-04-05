@@ -1,12 +1,9 @@
-const { getLogger } = require('../config/logger');
-
 class SubscriptionRepository {
     constructor(pool) {
         if (!pool) {
             throw new Error('SubscriptionRepository requires a database pool.');
         }
         this.pool = pool;
-        this.logger = getLogger('subscription-repository');
     }
 
     /**
@@ -15,7 +12,7 @@ class SubscriptionRepository {
      * @returns {Promise<Object|null>} The subscription object or null if not found.
      */
     async findById(subscriptionId) {
-        this.logger.debug('Finding subscription by ID', { subscription_id: subscriptionId });
+        console.debug('Finding subscription by ID', { subscription_id: subscriptionId });
         try {
             const result = await this.pool.query(
                 `SELECT 
@@ -39,17 +36,13 @@ class SubscriptionRepository {
             );
             
             if (result.rowCount === 0) {
-                this.logger.warn('Subscription not found', { subscription_id: subscriptionId });
+                console.warn('Subscription not found', { subscription_id: subscriptionId });
                 return null;
             }
             
             return result.rows[0];
         } catch (error) {
-            this.logger.error('Error retrieving subscription by ID', {
-                subscription_id: subscriptionId,
-                error: error.message,
-                code: error.code
-            });
+            console.error('Error retrieving subscription by ID', { error: error.message });
             throw error; // Re-throw the error to be handled by the service layer
         }
     }
@@ -60,7 +53,7 @@ class SubscriptionRepository {
      * @returns {Promise<boolean>} True if update was successful, false otherwise.
      */
     async updateLastProcessed(subscriptionId) {
-        this.logger.debug('Updating subscription last_processed_at', { subscription_id: subscriptionId });
+        console.debug('Updating subscription last_processed_at', { subscription_id: subscriptionId });
         try {
             const result = await this.pool.query(
                 `UPDATE subscriptions
@@ -72,11 +65,7 @@ class SubscriptionRepository {
             
             return result.rowCount > 0;
         } catch (error) {
-            this.logger.error('Failed to update subscription last_processed_at', {
-                subscription_id: subscriptionId,
-                error: error.message,
-                code: error.code
-            });
+            console.error('Failed to update subscription last_processed_at', { error: error.message });
             // Decide whether to throw or return false based on desired service behavior
             throw error; 
         }

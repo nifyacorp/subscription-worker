@@ -3,9 +3,6 @@
  * This file serves as the main entry point for all API routes.
  */
 const express = require('express');
-const { getLogger } = require('../../config/logger');
-
-const logger = getLogger('api');
 
 function createApiRouter(options) {
   const { 
@@ -26,7 +23,8 @@ function createApiRouter(options) {
   router.use(createHealthRouter(pool));
   
   // Mount subscriptions router with proper prefix
-  router.use('/subscriptions', createSubscriptionsRouter(subscriptionProcessor));
+  const subscriptionsRouter = createSubscriptionsRouter(subscriptionProcessor);
+  router.use('/subscriptions', subscriptionsRouter);
   
   // Mount BOE router
   router.use('/boe', createBOERouter(parserApiKey));
@@ -67,6 +65,7 @@ function createApiRouter(options) {
     });
   });
   
+  console.info('Main API router created successfully');
   return router;
 }
 

@@ -7,7 +7,6 @@ const expressPino = require('express-pino-logger');
 const { promisify } = require('util');
 require('dotenv').config();
 
-const { getLogger, expressLogger } = require('./config/logger');
 const { initializePool } = require('./config/database');
 const { getSecret, initialize: initializeSecrets } = require('./config/secrets');
 const { initializePubSub } = require('./config/pubsub');
@@ -25,12 +24,6 @@ const NotificationClient = require('./clients/NotificationClient');
 // Service
 const SubscriptionService = require('./services/SubscriptionService');
 const { SubscriptionController } = require('./controllers/SubscriptionController');
-
-const logger = getLogger('server');
-const expressLogger = expressPino({ logger });
-
-// Import error handlers
-const { errorHandler, notFoundHandler } = require('./middleware/errorHandler');
 
 // Global variables and configuration
 let pool;
@@ -61,20 +54,20 @@ function setupGracefulShutdown(server, pool) {
   process.removeAllListeners('SIGINT');
 
   const shutdown = async (signal) => {
-    logger.info({ signal }, 'Shutdown signal received, closing server...');
+    console.info('Shutdown signal received...');
     
     try {
       await promisify(server.close.bind(server))();
-      logger.info('Server closed');
+      console.info('Server closed');
       
       if (pool) {
         await pool.end();
-        logger.info('Database pool closed');
+        console.info('Database pool closed');
       }
       
       process.exit(0);
     } catch (error) {
-      logger.error({ error }, 'Error during shutdown');
+      console.error('Error during shutdown', error);
       process.exit(1);
     }
   };
@@ -88,7 +81,7 @@ function setupGracefulShutdown(server, pool) {
  * @returns {Object} Mock database pool
  */
 function createMockPool() {
-  logger.debug('Creating mock database pool');
+  console.debug('Creating mock database pool');
   
   // Create a mock client that throws clear errors
   const createMockClient = () => {
@@ -97,7 +90,7 @@ function createMockPool() {
         throw new Error('Mock database client cannot execute queries. Please ensure PostgreSQL is running.');
       },
       release: () => {
-        logger.debug('Mock client released');
+        console.debug('Mock client released');
       }
     };
   };
@@ -109,7 +102,7 @@ function createMockPool() {
     waitingCount: 0,
     
     connect: async () => {
-      logger.debug('Mock database connect called');
+      console.debug('Mock database connect called');
       if (Math.random() < 0.3) {
         // Sometimes throw to simulate transient errors
         throw new Error('Mock database connection temporarily unavailable (simulated error)');
@@ -118,17 +111,17 @@ function createMockPool() {
     },
     
     query: async () => {
-      logger.debug('Mock database query called');
+      console.debug('Mock database query called');
       throw new Error('Mock database pool cannot execute queries. Please ensure PostgreSQL is running.');
     },
     
     on: (event, callback) => {
-      logger.debug(`Mock pool registered event listener for: ${event}`);
+      console.debug(`Mock pool registered event listener for: ${event}`);
       return this;
     },
     
     end: async () => {
-      logger.debug('Mock pool end called');
+      console.debug('Mock pool end called');
       return Promise.resolve();
     },
     
@@ -141,7 +134,7 @@ function createMockPool() {
  * Registers application routes.
  */
 function registerRoutes(app, dependencies) {
-    logger.info('Registering application routes...');
+    console.info('Registering application routes...');
     const { 
         pool, 
         subscriptionController, 
@@ -150,39 +143,39 @@ function registerRoutes(app, dependencies) {
 
     // Health Check
     app.use(createHealthRouter(pool));
-    logger.debug('Registered health routes.');
+    console.debug('Registered health routes.');
 
     // API Routes
     app.use('/api', createApiRouter({ subscriptionController, parserApiKey, pool })); 
-    logger.debug('Registered API routes under /api.');
+    console.debug('Registered API routes under /api.');
 
     // Legacy Routes (Commented out)
     // app.use(createLegacyRouter({ parserApiKey })); 
-    // logger.debug('Legacy routes registration skipped.');
+    // console.debug('Legacy routes registration skipped.');
 
     // Forward root level requests (Adjust if needed)
     app.use((req, res, next) => {
       if (req.path.startsWith('/api/') || req.path === '/' || req.path === '/health' || req.path === '/_health') {
         return next();
       }
-      logger.debug(`Redirecting non-API request: ${req.path} -> /api${req.path}`);
+      console.debug(`Redirecting non-API request: ${req.path} -> /api${req.path}`);
       req.url = `/api${req.path}`;
       next('route');
     });
 
-    logger.info('Application routes registered.');
+    console.info('Application routes registered.');
 }
 
 /**
  * Registers global error handlers.
  */
 function registerErrorHandlers(app) {
-    logger.info('Registering error handlers...');
+    console.info('Registering error handlers...');
     // 404 Handler
     app.use(notFoundHandler);
     // Generic Error Handler
     app.use(errorHandler);
-    logger.info('Global error handlers registered.');
+    console.info('Global error handlers registered.');
 }
 
 /**
@@ -194,40 +187,40 @@ async function startServer() {
   let mockDatabaseMode = false;
 
   try {
-    logger.info('--- Starting Subscription Worker ---');
+    console.info('--- Starting Subscription Worker ---');
     validateEnvironment();
     const projectId = process.env.PROJECT_ID;
 
     // Init Secrets
-    logger.debug('Initializing Secret Manager');
+    console.debug('Initializing Secret Manager');
     await initializeSecrets();
-    logger.debug('Secret Manager initialized');
+    console.debug('Secret Manager initialized');
 
     // Init PubSub (for NotificationClient)
-    logger.debug('Initializing PubSub infrastructure');
+    console.debug('Initializing PubSub infrastructure');
     const pubsubConfig = await initializePubSub(); // Assume this returns necessary config or client instance
-    logger.debug('PubSub infrastructure initialized');
+    console.debug('PubSub infrastructure initialized');
 
     // Init DB
-    logger.debug('Initializing database pool');
+    console.debug('Initializing database pool');
     try {
       pool = await initializePool();
       const client = await pool.connect(); client.release();
-      logger.info('Successfully connected to database');
+      console.info('Successfully connected to database');
     } catch (dbError) {
-      logger.warn('Failed to connect to database', { error: dbError.message, code: dbError.code });
+      console.warn('Failed to connect to database', { error: dbError.message, code: dbError.code });
       if (process.env.NODE_ENV === 'development') {
         mockDatabaseMode = true;
         pool = createMockPool();
-        logger.info('Created mock database pool for development');
+        console.info('Created mock database pool for development');
       } else {
-        logger.error('Database connection required in production mode', { error: dbError.message });
+        console.error('Database connection required in production mode', { error: dbError.message });
         throw dbError;
       }
     }
 
     // --- Dependency Injection Setup ---
-    logger.info('Instantiating application components...');
+    console.info('Instantiating application components...');
     
     // Clients
     const parserClient = new ParserClient({}); // Add config if needed
@@ -245,7 +238,6 @@ async function startServer() {
         notificationRepository,
         parserClient, // Inject the client instance
         notificationClient,
-        logger: getLogger('subscription-service') // Inject specific logger
     });
 
     // Controller
@@ -261,18 +253,17 @@ async function startServer() {
         // Add parserApiKey if createApiRouter or others need it directly
         // parserApiKey: await getSecret('PARSER_API_KEY').catch(() => null) 
     };
-    logger.info('Application components instantiated.');
+    console.info('Application components instantiated.');
 
     // --- Setup Express App ---
     const app = express();
     app.locals.mockDatabaseMode = mockDatabaseMode;
-    app.use(expressLogger);
     app.use(express.json());
     
     // Middleware to check mock DB status (keep if needed)
     app.use((req, res, next) => {
       if (mockDatabaseMode && (req.path.includes('/process') || req.path.includes('/batch'))) {
-        logger.warn('Attempt to use DB-dependent endpoint in mock mode', { path: req.path });
+        console.warn('Attempt to use DB-dependent endpoint in mock mode', { path: req.path });
         return res.status(503).json({ status: 'error', error: 'Database unavailable in mock mode' });
       }
       next();
@@ -287,22 +278,22 @@ async function startServer() {
     // --- Start Server ---
     const port = process.env.PORT || 8080;
     server = app.listen(port, () => {
-      logger.info({ port, node_env: process.env.NODE_ENV }, `Server listening on port ${port}`);
+      console.info({ port, node_env: process.env.NODE_ENV }, `Server listening on port ${port}`);
     });
     
     setupGracefulShutdown(server, pool);
-    logger.info('--- Subscription Worker Started Successfully ---');
+    console.info('--- Subscription Worker Started Successfully ---');
 
   } catch (error) {
-    logger.fatal({ phase: 'server_startup_failed', error: error.message, stack: error.stack }, 'Fatal error during server startup.');
-    if (pool && typeof pool.end === 'function') { try { await pool.end(); } catch (e) { logger.error('Error closing pool during failed startup', e); } }
+    console.error({ phase: 'server_startup_failed', error: error.message, stack: error.stack }, 'Fatal error during server startup.');
+    if (pool && typeof pool.end === 'function') { try { await pool.end(); } catch (e) { console.error('Error closing pool during failed startup', e); } }
     process.exit(1);
   }
 }
 
 // Global error handlers
 const handleFatalError = (error, type) => {
-  logger.fatal({
+  console.error({
     phase: 'fatal_error',
     error,
     errorName: error.name,

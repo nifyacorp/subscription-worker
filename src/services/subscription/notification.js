@@ -1,12 +1,8 @@
-const { getLogger } = require('../../config/logger');
 const { publishEmailNotification } = require('../../config/pubsub');
 
-const logger = getLogger('subscription-notification');
-
 class NotificationService {
-  constructor(pool) {
-    this.pool = pool;
-    this.logger = logger;
+  constructor(dbClient) {
+    this.dbClient = dbClient;
   }
 
   async createNotifications(client, subscription, matches) {
@@ -54,7 +50,7 @@ class NotificationService {
       });
     }
 
-    this.logger.debug({
+    console.debug({
       notifications_created: notificationValues.length
     }, 'Created notifications for matches');
     
@@ -89,7 +85,7 @@ class NotificationService {
       `, [subscription.user_id]);
       
       if (userResult.rows.length === 0) {
-        this.logger.warn({
+        console.warn({
           user_id: subscription.user_id,
           subscription_id: subscription.subscription_id
         }, 'User not found for notification email');
@@ -100,7 +96,7 @@ class NotificationService {
       
       // Check if email notifications are enabled
       if (user.email_notifications !== 'true') {
-        this.logger.debug({
+        console.debug({
           user_id: user.id,
           subscription_id: subscription.subscription_id
         }, 'Email notifications disabled for user');
@@ -127,7 +123,7 @@ class NotificationService {
           frequency
         );
         
-        this.logger.info({
+        console.info({
           notification_id: notification.id,
           user_id: user.id,
           subscription_id: subscription.subscription_id,
@@ -135,7 +131,7 @@ class NotificationService {
         }, 'Published notification to email service');
       }
     } catch (error) {
-      this.logger.error({
+      console.error({
         error: error.message,
         stack: error.stack,
         subscription_id: subscription.subscription_id,
@@ -144,6 +140,31 @@ class NotificationService {
       
       // We don't throw the error here to prevent the entire transaction from failing
       // The notifications are already stored in the database
+    }
+  }
+
+  async createNotification(notificationData) {
+    // ... (data validation)
+    console.debug('Creating notification in database', { userId: notificationData.user_id });
+
+    try {
+      // ... (database query)
+      console.info('Notification created successfully', { notificationId: result.rows[0].id });
+      return result.rows[0];
+    } catch (error) {
+      console.error('Error creating notification', { error: error.message });
+      throw error;
+    }
+  }
+  
+  async getNotifications(userId, filters) {
+    console.debug('Fetching notifications for user', { userId });
+    try {
+      // ... (database query)
+      return result.rows;
+    } catch (error) {
+      console.error('Error fetching notifications', { error: error.message });
+      throw error;
     }
   }
 }

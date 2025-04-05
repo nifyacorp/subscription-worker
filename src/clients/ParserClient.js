@@ -1,4 +1,3 @@
-const { getLogger } = require('../config/logger');
 const { ParserClient: BoeParserClient } = require('../utils/parser-protocol'); // Renamed to avoid name clash if needed
 const { getSecret } = require('../config/secrets'); // Assuming secrets config is initialized elsewhere
 

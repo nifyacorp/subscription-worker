@@ -9,7 +9,6 @@ const axios = require('axios');
 const { z } = require('zod');
 const http = require('http');
 const https = require('https');
-const { getLogger } = require('../config/logger');
 
 // Constants
 const DEFAULT_TIMEOUT = 120000; // 2 minutes
@@ -78,7 +77,6 @@ class ParserClient {
    * @param {string} config.baseURL - Base URL for the parser service
    * @param {string} [config.apiKey] - API key for authentication
    * @param {string} [config.type] - Parser type (e.g., 'boe', 'doga')
-   * @param {Object} [config.logger] - Logger instance
    */
   constructor(config) {
     if (!config || !config.baseURL) {
@@ -89,7 +87,6 @@ class ParserClient {
     this.baseURL = config.baseURL;
     this.apiKey = config.apiKey || '';
     this.type = config.type || 'generic';
-    this.logger = config.logger || getLogger(`${this.type}-parser-client`);
     
     // Create agents for keep-alive connections
     const isHttps = this.baseURL.startsWith('https://');
@@ -112,69 +109,33 @@ class ParserClient {
       maxRedirects: 5
     });
     
-    // Configure interceptors for logging
-    this._configureInterceptors();
-    
-    this.logger.debug('Parser client initialized', {
-      type: this.type,
-      baseURL: this.baseURL,
-      api_key_present: !!this.apiKey,
-      keep_alive: true
-    });
+    this._initializeClient(config);
   }
   
-  /**
-   * Configure request and response interceptors
-   * @private
-   */
-  _configureInterceptors() {
-    // Request interceptor
-    this.client.interceptors.request.use((config) => {
-      // Mask sensitive information
-      const maskedHeaders = { ...config.headers };
-      if (maskedHeaders.Authorization) {
-        maskedHeaders.Authorization = maskedHeaders.Authorization.replace(
-          /Bearer\s+(.{3}).*(.{3})$/,
-          'Bearer $1***$2'
-        );
-      }
-      
-      this.logger.debug({
-        method: config.method,
-        url: config.url,
-        headers: maskedHeaders,
-        data_size: config.data ? JSON.stringify(config.data).length : 0
-      }, 'Outgoing request');
-      
-      return config;
+  _initializeClient(config) {
+    // Configure interceptors for logging
+    this.client.interceptors.request.use((reqConfig) => {
+      console.debug('ParserClient: Outgoing request', { method: reqConfig.method, url: reqConfig.url });
+      return reqConfig;
     });
     
-    // Response interceptor
     this.client.interceptors.response.use(
       (response) => {
-        this.logger.debug({
-          status: response.status,
-          data_size: JSON.stringify(response.data).length,
-          results_count: response.data?.results?.length || 0
-        }, 'Response received');
+        console.debug('ParserClient: Response received', { status: response.status });
         return response;
       },
       (error) => {
-        this.logger.error({
-          error: {
-            name: error.name,
-            message: error.message,
-            code: error.code
-          },
-          response: error.response ? {
-            status: error.response.status,
-            data: error.response.data
-          } : undefined
-        }, 'Request failed');
-        
+        console.error('ParserClient: Request failed', { 
+          message: error.message, 
+          code: error.code, 
+          status: error.response?.status, 
+          url: error.config?.url 
+        });
         throw error;
       }
     );
+
+    console.debug('Parser client initialized', { type: this.type, baseURL: this.baseURL });
   }
   
   /**
@@ -214,7 +175,7 @@ class ParserClient {
     try {
       return ParserRequestSchema.parse(request);
     } catch (error) {
-      this.logger.error('Invalid parser request', {
+      console.error('Invalid parser request', {
         error: error.message,
         issues: error.issues,
         request
@@ -238,12 +199,7 @@ class ParserClient {
     // Extract the subscription ID for logging
     const subscriptionId = requestBody.metadata?.subscription_id || 'unknown';
     
-    this.logger.info('Sending request to parser', {
-      type: this.type,
-      subscription_id: subscriptionId,
-      prompt_count: requestBody.texts.length,
-      endpoint
-    });
+    console.info('Sending request to parser', { endpoint, type: this.type });
     
     while (retries <= MAX_RETRIES) {
       try {
@@ -254,7 +210,7 @@ class ParserClient {
         );
         
         if (retries > 0) {
-          this.logger.debug(`Retry attempt ${retries}/${MAX_RETRIES}`, {
+          console.debug(`Retry attempt ${retries}/${MAX_RETRIES}`, {
             subscription_id: subscriptionId,
             timeout_ms: currentTimeout
           });
@@ -271,7 +227,7 @@ class ParserClient {
           const validatedResponse = ParserResponseSchema.parse(response.data);
           return this._normalizeResponse(validatedResponse, requestBody.texts);
         } catch (validationError) {
-          this.logger.warn('Invalid parser response format', {
+          console.warn('Invalid parser response format', {
             subscription_id: subscriptionId,
             error: validationError.message,
             issues: validationError.issues
@@ -301,12 +257,10 @@ class ParserClient {
         
         // If not retryable or max retries reached, break the loop
         if (!isRetryable || retries > MAX_RETRIES) {
-          this.logger.error('Non-retryable error or max retries reached', {
-            subscription_id: subscriptionId,
-            error: error.message,
-            code: error.code,
-            is_retryable: isRetryable,
-            retry_count: retries
+          console.error('ParserClient: Non-retryable error or max retries reached', { 
+            error: error.message, 
+            status: error.response?.status, 
+            retries 
           });
           break;
         }
@@ -320,13 +274,10 @@ class ParserClient {
         // Increase timeout for next attempt
         timeoutFactor = 1.5 * Math.pow(1.5, retries - 1);
         
-        this.logger.warn(`Retryable error, waiting ${Math.round(delay)}ms before retry`, {
-          subscription_id: subscriptionId,
-          error: error.message,
-          code: error.code,
-          retry: retries,
-          max_retries: MAX_RETRIES,
-          next_timeout_ms: Math.min(DEFAULT_TIMEOUT * timeoutFactor, 240000)
+        console.warn(`ParserClient: Retryable error, waiting ${Math.round(delay)}ms before retry`, { 
+            error: error.message, 
+            status: error.response?.status, 
+            attempt: retries 
         });
         
         // Wait before retrying
@@ -335,12 +286,7 @@ class ParserClient {
     }
     
     // All retries failed
-    this.logger.error('All retry attempts failed', {
-      subscription_id: subscriptionId,
-      error: lastError?.message,
-      code: lastError?.code,
-      retry_count: retries
-    });
+    console.error('ParserClient: All retry attempts failed', { error: lastError?.message });
     
     return {
       entries: [],
@@ -415,7 +361,7 @@ class ParserClient {
       });
     }
     
-    this.logger.debug('Parser client connections closed');
+    console.debug('Parser client connections closed');
   }
 }
 

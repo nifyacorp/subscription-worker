@@ -1,12 +1,9 @@
-const { getLogger } = require('../config/logger');
-
 class NotificationRepository {
     constructor(pool) {
         if (!pool) {
             throw new Error('NotificationRepository requires a database pool.');
         }
         this.pool = pool;
-        this.logger = getLogger('notification-repository');
     }
 
     /**
@@ -28,12 +25,7 @@ class NotificationRepository {
             source_url, metadata, entity_type, created_at 
         } = notificationData;
 
-        this.logger.debug('Creating notification', { 
-            user_id: user_id, 
-            subscription_id: subscription_id, 
-            title: title ? title.substring(0, 50) + '...' : '', // Log truncated title 
-            entity_type: entity_type
-        });
+        console.debug('Creating notification', { user_id: user_id, subscription_id: subscription_id });
 
         try {
             const result = await this.pool.query(
@@ -61,21 +53,15 @@ class NotificationRepository {
             );
 
             if (result.rowCount === 0) {
-                this.logger.error('Failed to insert notification, no rows returned.', { user_id, subscription_id });
+                console.error('Failed to insert notification, no rows returned.', { user_id, subscription_id });
                 throw new Error('Notification creation failed in DB.');
             }
 
-            this.logger.info('Successfully created notification', { notification_id: result.rows[0].id, user_id, subscription_id });
+            console.info('Successfully created notification', { notification_id: result.rows[0].id });
             return result.rows[0]; // Return the created notification object
 
         } catch (error) {
-            this.logger.error('Error creating notification in database', {
-                user_id: user_id,
-                subscription_id: subscription_id,
-                error: error.message,
-                code: error.code,
-                // Avoid logging potentially large content/metadata here unless necessary for debugging
-            });
+            console.error('Error creating notification in database', { error: error.message });
             throw error; // Re-throw for the service layer
         }
     }

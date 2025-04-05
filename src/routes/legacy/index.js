@@ -3,9 +3,6 @@
  * Provides backward compatibility with older endpoints
  */
 const express = require('express');
-const { getLogger } = require('../../config/logger');
-
-const logger = getLogger('legacy-routes');
 
 function createLegacyRouter(options) {
   const { subscriptionProcessor } = options;
@@ -15,18 +12,10 @@ function createLegacyRouter(options) {
    * Legacy endpoint for processing subscriptions
    * Redirects to the standard API endpoint
    */
-  router.post('/process-subscription/:id', (req, res, next) => {
-    const { id } = req.params;
-    
-    logger.info('Legacy endpoint called, redirecting to standard endpoint', {
-      subscription_id: id,
-      original_path: req.path,
-      redirecting_to: `/api/subscriptions/process/${id}`
-    });
-    
-    // Forward to the new API path
-    req.url = `/api/subscriptions/process/${id}`;
-    next('route');
+  router.post('/process-subscription/:id', (req, res) => {
+    const newPath = `/api/subscriptions/process/${req.params.id}`;
+    console.info(`Legacy endpoint /process-subscription/:id called, redirecting to ${newPath}`);
+    res.redirect(307, newPath);
   });
 
   /**

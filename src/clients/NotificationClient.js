@@ -1,11 +1,9 @@
-const { getLogger } = require('../config/logger');
 const { PubSub } = require('@google-cloud/pubsub');
 
 const NOTIFICATION_TOPIC = process.env.NOTIFICATION_TOPIC || 'subscription-notifications';
 
 class NotificationClient {
     constructor(config) {
-        this.logger = getLogger('notification-client');
         this.pubsub = null;
         this.notificationTopic = null;
         this.projectId = config.projectId || process.env.PROJECT_ID || process.env.GOOGLE_CLOUD_PROJECT;
@@ -15,21 +13,13 @@ class NotificationClient {
             try {
                 this.pubsub = new PubSub({ projectId: this.projectId });
                 this.notificationTopic = this.pubsub.topic(NOTIFICATION_TOPIC);
-                this.logger.info('PubSub Notification Client initialized', {
-                    project_id: this.projectId,
-                    topic: NOTIFICATION_TOPIC
-                });
+                console.info('PubSub Notification Client initialized', { project_id: this.projectId });
             } catch (error) {
-                this.logger.warn('Failed to initialize PubSub for notifications', {
-                    error: error.message,
-                    project_id: this.projectId,
-                    topic: NOTIFICATION_TOPIC
-                });
-                // Optionally disable if init fails, or let publish attempts handle it
+                console.warn('Failed to initialize PubSub for notifications', { error: error.message });
                 this.isEnabled = false; 
             }
         } else {
-            this.logger.info('PubSub Notification Client is disabled or missing Project ID.');
+            console.info('PubSub Notification Client is disabled or missing Project ID.');
             this.isEnabled = false;
         }
     }
@@ -41,7 +31,7 @@ class NotificationClient {
      */
     async publishNotification(notificationData) {
         if (!this.isEnabled || !this.notificationTopic) {
-            this.logger.debug('Notification publishing is disabled or not initialized, skipping.');
+            console.debug('Notification publishing is disabled or not initialized, skipping.');
             return null;
         }
 
@@ -49,28 +39,16 @@ class NotificationClient {
         const userId = notificationData.user_id || 'unknown';
         const traceId = notificationData.trace_id || 'N/A';
 
-        this.logger.debug('Publishing notification event', { notification_id: notificationId, user_id: userId, trace_id: traceId });
+        console.debug('Publishing notification event', { notification_id: notificationId });
 
         try {
             const messageBuffer = Buffer.from(JSON.stringify(notificationData));
             const messageId = await this.notificationTopic.publishMessage({ data: messageBuffer });
             
-            this.logger.info('Successfully published notification to PubSub', {
-                notification_id: notificationId,
-                user_id: userId,
-                message_id: messageId,
-                trace_id: traceId
-            });
+            console.info('Successfully published notification to PubSub', { message_id: messageId });
             return messageId;
         } catch (error) {
-            this.logger.error('Failed to publish notification event to PubSub', {
-                notification_id: notificationId,
-                user_id: userId,
-                error: error.message,
-                code: error.code,
-                trace_id: traceId
-            });
-            // Do not re-throw, allow the service to continue if publishing fails
+            console.error('Failed to publish notification event to PubSub', { error: error.message });
             return null; 
         }
     }
