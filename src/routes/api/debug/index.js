@@ -7,9 +7,6 @@
  */
 
 const express = require('express');
-const { getLogger } = require('../../../config/logger');
-
-const logger = getLogger('debug-api');
 
 /**
  * Create debug router with all debug endpoints
@@ -195,11 +192,6 @@ function createDebugRouter(options) {
         }
       });
     } catch (error) {
-      logger.error('Error in debug status endpoint', {
-        error: error.message,
-        stack: error.stack
-      });
-      
       res.status(500).json({
         status: 'error',
         error: 'Failed to retrieve service status',
@@ -263,8 +255,6 @@ function createDebugRouter(options) {
     const processor = subscriptionProcessor.processorMap[type];
     
     try {
-      logger.info(`Testing ${type} processor`, { prompts, options });
-      
       const startTime = Date.now();
       
       // Create test data
@@ -298,13 +288,6 @@ function createDebugRouter(options) {
         result: result
       });
     } catch (error) {
-      logger.error(`Error testing ${type} processor`, {
-        error: error.message,
-        stack: error.stack,
-        prompts,
-        options
-      });
-      
       res.status(500).json({
         status: 'error',
         error: `Error testing ${type} processor`,
@@ -382,12 +365,6 @@ function createDebugRouter(options) {
         client.release();
       }
     } catch (error) {
-      logger.error('Database test failed', {
-        error: error.message,
-        code: error.code,
-        stack: error.stack
-      });
-      
       res.status(500).json({
         status: 'error',
         error: 'Database test failed',
@@ -447,11 +424,6 @@ function createDebugRouter(options) {
         }
       });
     } catch (error) {
-      logger.error('Error retrieving logs', {
-        error: error.message,
-        stack: error.stack
-      });
-      
       res.status(500).json({
         status: 'error',
         error: 'Failed to retrieve logs',

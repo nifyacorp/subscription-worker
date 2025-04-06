@@ -3,10 +3,9 @@
  * Handles BOE-specific operations.
  */
 const express = require('express');
-const { getLogger } = require('../../../config/logger');
+// Removed: const { getLogger } = require('../../../config/logger');
+// Removed: const logger = getLogger('boe-api');
 const { validateBOERequest } = require('../../../middleware/validation');
-
-const logger = getLogger('boe-api');
 
 /**
  * Create BOE router
@@ -21,14 +20,16 @@ function createBOERouter(parserApiKey) {
    * Process a BOE subscription
    */
   router.post('/process', validateBOERequest, async (req, res) => {
+    // Removed: logger.info('BOE processing request received');
+    console.info('BOE processing request received'); // Replace logger
     const { prompts, options, user_id, subscription_id } = req.body;
     
-    logger.info('BOE process request received', {
-      prompts_count: prompts.length,
-      user_id: user_id || 'not provided',
-      subscription_id: subscription_id || 'not provided',
-      options: options || {}
-    });
+    // Removed: logger.info('BOE process request received', {
+    //   prompts_count: prompts.length,
+    //   user_id: user_id || 'not provided',
+    //   subscription_id: subscription_id || 'not provided',
+    //   options: options || {}
+    // });
     
     try {
       // Initialize BOE processor
@@ -57,20 +58,21 @@ function createBOERouter(parserApiKey) {
       // Add processing time to result
       result.processing_time_ms = processingTime;
       
-      logger.info('BOE processing completed', {
-        prompts_count: prompts.length,
-        processing_time_ms: processingTime,
-        entries_count: result.entries?.length || 0,
-        matches_count: result.matches?.length || 0
-      });
+      // Removed: logger.info('BOE processing completed', {
+      //   prompts_count: prompts.length,
+      //   processing_time_ms: processingTime,
+      //   entries_count: result.entries?.length || 0,
+      //   matches_count: result.matches?.length || 0
+      // });
       
       res.status(200).json(result);
     } catch (error) {
-      logger.error('Error processing BOE request', {
-        error: error.message,
-        stack: error.stack,
-        prompts_count: prompts.length
-      });
+      // Removed: logger.error('Error processing BOE request', {
+      //   error: error.message,
+      //   stack: error.stack,
+      //   prompts_count: prompts.length
+      // });
+      console.error('Error processing BOE request', { error: error.message }); // Replace logger
       
       res.status(500).json({
         status: 'error',
@@ -148,7 +150,7 @@ function createBOERouter(parserApiKey) {
     }
     
     // This is a placeholder - would normally connect to BOE API
-    logger.info(`Request for BOE document ${id}`);
+    // Removed: logger.info(`Request for BOE document ${id}`);
     
     res.status(404).json({
       status: 'error',

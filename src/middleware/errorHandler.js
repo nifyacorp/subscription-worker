@@ -6,8 +6,7 @@
  * on how to properly use the endpoint.
  */
 
-const { getLogger } = require('../config/logger');
-const logger = getLogger('error-handler');
+const ZodError = require('zod').ZodError;
 
 /**
  * Route documentation map containing usage information for endpoints
@@ -121,19 +120,19 @@ function findRouteDocumentation(path, method) {
 /**
  * Main error handler middleware
  */
-function errorHandler(err, req, res, next) {
+const errorHandler = (err, req, res, next) => {
   // Set default status code if not set
   const statusCode = err.statusCode || 500;
   
   // Log the error
-  logger.error({
+  console.error({
     path: req.path,
     method: req.method,
     error: err.message,
     stack: err.stack,
     status_code: statusCode,
     request_id: req.headers['x-request-id'] || 'unknown'
-  }, 'Request error');
+  }, 'Global error handler caught an error');
   
   // Find documentation for this route
   const routeDoc = findRouteDocumentation(req.path, req.method);
@@ -194,13 +193,13 @@ function errorHandler(err, req, res, next) {
   
   // Send the response
   res.status(statusCode).json(errorResponse);
-}
+};
 
 /**
  * Handle 404 Not Found errors
  */
-function notFoundHandler(req, res, next) {
-  logger.warn({
+const notFoundHandler = (req, res, next) => {
+  console.warn({
     path: req.path,
     method: req.method,
     headers: req.headers,
@@ -220,6 +219,6 @@ function notFoundHandler(req, res, next) {
       '/api/boe/process': 'Process BOE-specific subscription'
     }
   });
-}
+};
 
 module.exports = { errorHandler, notFoundHandler };

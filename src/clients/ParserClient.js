@@ -7,9 +7,8 @@ const PARSER_API_KEY_SECRET_NAME = 'PARSER_API_KEY';
 
 class ParserClient {
     constructor(config) {
-        this.logger = getLogger('parser-client');
         this.parserBaseUrl = config.parserBaseUrl || process.env.PARSER_BASE_URL || DEFAULT_PARSER_BASE_URL;
-        this.parserApiKey = config.parserApiKey; // API key can be passed directly or fetched
+        this.parserApiKey = config.parserApiKey;
         this.isInitialized = false;
         this.boeClient = null;
     }
@@ -27,11 +26,9 @@ class ParserClient {
         if (!this.parserApiKey) {
             try {
                 this.parserApiKey = await getSecret(PARSER_API_KEY_SECRET_NAME);
-                this.logger.info('Parser API key retrieved successfully.');
+                console.info('Parser API key retrieved successfully.');
             } catch (error) {
-                this.logger.warn(`Failed to retrieve parser API key (${PARSER_API_KEY_SECRET_NAME}). Parser requests might fail if key is required.`, {
-                    error: error.message
-                });
+                console.warn(`Failed to retrieve parser API key (${PARSER_API_KEY_SECRET_NAME}). Parser requests might fail if key is required.`, { error: error.message });
                 this.parserApiKey = null; // Ensure it's null if fetch failed
             }
         }
@@ -41,16 +38,15 @@ class ParserClient {
                 baseURL: this.parserBaseUrl,
                 apiKey: this.parserApiKey,
                 type: 'boe', // Assuming type is always BOE for this context
-                logger: this.logger // Pass the logger instance
             });
 
-            this.logger.info('BOE Parser client configured', { 
+            console.info('BOE Parser client configured', { 
                 base_url: this.parserBaseUrl, 
                 api_key_present: !!this.parserApiKey 
             });
             this.isInitialized = true;
         } catch (error) {
-            this.logger.error('Failed to initialize BOE Parser client', { error: error.message });
+            console.error('Failed to initialize BOE Parser client', { error: error.message });
             throw error; // Re-throw initialization error
         }
     }
@@ -66,7 +62,7 @@ class ParserClient {
      */
     createRequest(prompts, userId, subscriptionId, options) {
         if (!this.isInitialized || !this.boeClient) {
-            this.logger.error('ParserClient not initialized. Call initialize() first.');
+            console.error('ParserClient not initialized. Call initialize() first.');
             throw new Error('ParserClient not initialized.');
         }
         return this.boeClient.createRequest(prompts, userId, subscriptionId, options);
@@ -80,25 +76,25 @@ class ParserClient {
      */
     async send(requestData) {
         if (!this.isInitialized || !this.boeClient) {
-            this.logger.error('ParserClient not initialized. Call initialize() first.');
+            console.error('ParserClient not initialized. Call initialize() first.');
             throw new Error('ParserClient not initialized.');
         }
 
-        this.logger.debug('Sending request to BOE parser', { 
+        console.debug('Sending request to BOE parser', { 
             // Avoid logging full request data unless necessary for debugging
             subscription_id: requestData?.metadata?.subscription_id || 'unknown'
         }); 
 
         try {
             const result = await this.boeClient.send(requestData);
-            this.logger.info('Received response from BOE parser', { 
+            console.info('Received response from BOE parser', { 
                 status: result?.status,
                 entries_count: result?.entries?.length || 0,
                 subscription_id: requestData?.metadata?.subscription_id || 'unknown'
             });
             return result;
         } catch (error) {
-             this.logger.error('Error communicating with BOE parser', { 
+             console.error('Error communicating with BOE parser', { 
                 error: error.message,
                 status: error.response?.status, // Include HTTP status if available
                 subscription_id: requestData?.metadata?.subscription_id || 'unknown'

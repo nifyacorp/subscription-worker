@@ -25,6 +25,9 @@ const NotificationClient = require('./clients/NotificationClient');
 const SubscriptionService = require('./services/SubscriptionService');
 const { SubscriptionController } = require('./controllers/SubscriptionController');
 
+// Import error handlers
+const { errorHandler, notFoundHandler } = require('./middleware/errorHandler');
+
 // Global variables and configuration
 let pool;
 let mockDatabaseMode = false;

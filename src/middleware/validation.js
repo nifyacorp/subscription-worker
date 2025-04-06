@@ -4,8 +4,12 @@
  * Provides validation for API requests with helpful error messages.
  */
 
-const { getLogger } = require('../config/logger');
-const logger = getLogger('validation');
+const { 
+  SubscriptionSchema, 
+  ProcessorResultSchema, 
+  ProcessingRequestSchema,
+  PubSubNotificationSchema  
+} = require('../types/schemas');
 
 /**
  * Validate UUID format

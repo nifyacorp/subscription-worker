@@ -1,17 +1,18 @@
 const { SecretManagerServiceClient } = require('@google-cloud/secret-manager');
-const { getLogger } = require('./logger');
+
+let client;
+let initialized = false;
 
 class SecretsManager {
   constructor() {
-    this.logger = getLogger('secrets');
-    this.client = null;
     this.isDevelopment = process.env.NODE_ENV === 'development' || !process.env.NODE_ENV;
     this.envSecrets = {};
   }
 
   async initialize() {
+    if (initialized) return;
     if (this.isDevelopment) {
-      this.logger.info('Running in development mode, using environment variables instead of Secret Manager');
+      console.info('Running in development mode, using environment variables instead of Secret Manager');
       // Pre-load environment variables as secrets
       this.envSecrets = {
         'DB_NAME': process.env.DB_NAME || 'nifya_db',
@@ -24,12 +25,13 @@ class SecretsManager {
       return;
     }
 
-    if (!this.client) {
+    if (!client) {
       try {
-        this.client = new SecretManagerServiceClient();
-        this.logger.info('Secret Manager client initialized');
+        client = new SecretManagerServiceClient();
+        initialized = true;
+        console.info('Secret Manager client initialized');
       } catch (error) {
-        this.logger.error({ error }, 'Failed to initialize Secret Manager client');
+        console.error('Failed to initialize Secret Manager client', { error: error.message });
         throw error;
       }
     }
@@ -39,35 +41,35 @@ class SecretsManager {
     // Use environment variables in development mode
     if (this.isDevelopment) {
       const secretValue = this.envSecrets[secretName];
-      this.logger.debug({ secretName, valueExists: !!secretValue }, 'Using development secret');
+      console.debug('Using development secret', { secretName, valueExists: !!secretValue });
       return secretValue;
     }
 
-    if (!this.client) {
+    if (!client) {
       await this.initialize();
     }
 
     try {
-      this.logger.debug({ 
+      console.debug('Attempting to retrieve secret', { 
         secretName,
         projectId: process.env.PROJECT_ID,
         secretPath: `projects/${process.env.PROJECT_ID}/secrets/${secretName}/versions/latest`
-      }, 'Attempting to retrieve secret');
+      });
 
-      const [version] = await this.client.accessSecretVersion({
+      const [version] = await client.accessSecretVersion({
         name: `projects/${process.env.PROJECT_ID}/secrets/${secretName}/versions/latest`,
       });
 
-      this.logger.debug({ 
+      console.debug('Secret retrieval details', { 
         secretName,
         secretExists: !!version,
         payloadExists: !!version?.payload,
         dataExists: !!version?.payload?.data
-      }, 'Secret retrieval details');
+      });
 
       return version.payload.data.toString();
     } catch (error) {
-      this.logger.error({ 
+      console.error('Failed to retrieve secret', { 
         error,
         errorName: error.name,
         errorCode: error.code,
@@ -75,7 +77,7 @@ class SecretsManager {
         errorStack: error.stack,
         secretName,
         projectId: process.env.PROJECT_ID
-      }, 'Failed to retrieve secret');
+      });
       throw error;
     }
   }

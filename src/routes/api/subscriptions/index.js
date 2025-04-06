@@ -7,9 +7,6 @@ const {
   validateSubscriptionId, 
   validateBatchRequest 
 } = require('../../../middleware/validation'); // Assuming validation middleware is still relevant
-const { getLogger } = require('../../../config/logger');
-
-const logger = getLogger('subscriptions-router');
 
 /**
  * Creates the Express router for subscription API endpoints.
@@ -22,7 +19,7 @@ function createSubscriptionsRouter(subscriptionController) {
   }
   const router = express.Router();
 
-  logger.info('Registering subscription API routes');
+  console.info('Registering subscription API routes');
 
   /**
    * GET /api/subscriptions/pending
@@ -32,7 +29,7 @@ function createSubscriptionsRouter(subscriptionController) {
     '/pending', 
     subscriptionController.getPendingSubscriptions // Delegate to controller method
   );
-  logger.debug('Registered GET /pending');
+  console.debug('Registered GET /pending');
 
   /**
    * POST /api/subscriptions/process/:id
@@ -43,7 +40,7 @@ function createSubscriptionsRouter(subscriptionController) {
     validateSubscriptionId, // Keep validation middleware if applicable
     subscriptionController.processSingleSubscription // Delegate to controller method
   );
-  logger.debug('Registered POST /process/:id');
+  console.debug('Registered POST /process/:id');
 
   /**
    * POST /api/subscriptions/batch/process
@@ -54,13 +51,13 @@ function createSubscriptionsRouter(subscriptionController) {
     validateBatchRequest, // Keep validation middleware if applicable
     subscriptionController.processBatchSubscriptions // Delegate to controller method
   );
-   logger.debug('Registered POST /batch/process');
+   console.debug('Registered POST /batch/process');
 
   // --- Remove old helper functions --- 
   // The createProcessingRecord and updateProcessingStatus functions 
   // have been moved to the ProcessTrackingRepository.
   
-  logger.info('Subscription API routes registered successfully');
+  console.info('Subscription API routes registered successfully');
   return router;
 }
 

@@ -1,8 +1,5 @@
 const { Pool } = require('pg');
-const { getLogger } = require('./logger');
 const { getSecret } = require('./secrets');
-
-const logger = getLogger('database');
 
 // Check if running in development mode
 const isDevelopment = process.env.NODE_ENV === 'development' || !process.env.NODE_ENV;
@@ -12,7 +9,7 @@ const INSTANCE_CONNECTION_NAME = process.env.PROJECT_ID
   : 'delta-entity-447812-p2:us-central1:nifya-db'; 
 
 async function createPoolConfig() {
-  logger.debug({
+  console.debug({
     instanceConnectionName: INSTANCE_CONNECTION_NAME,
     nodeEnv: process.env.NODE_ENV,
     projectId: process.env.PROJECT_ID,
@@ -25,12 +22,12 @@ async function createPoolConfig() {
 
     if (isDevelopment) {
       // In development mode, use environment variables directly
-      logger.debug('Using environment variables for database config in development mode');
+      console.debug('Using environment variables for database config in development mode');
       dbName = process.env.DB_NAME || 'nifya_db';
       dbUser = process.env.DB_USER || 'postgres';
       dbPassword = process.env.DB_PASSWORD || 'postgres';
       
-      logger.debug({
+      console.debug({
         dbName,
         dbUser,
         dbPassword: dbPassword ? '********' : undefined,
@@ -38,7 +35,7 @@ async function createPoolConfig() {
       }, 'Using development database configuration');
     } else {
       // In production, get secrets from Secret Manager
-      logger.debug('Starting secrets retrieval from Secret Manager');
+      console.debug('Starting secrets retrieval from Secret Manager');
       const secretsStartTime = Date.now();
       
       [dbName, dbUser, dbPassword] = await Promise.all([
@@ -47,7 +44,7 @@ async function createPoolConfig() {
         getSecret('DB_PASSWORD'),
       ]);
       
-      logger.debug({
+      console.debug({
         secrets_retrieval_time: Date.now() - secretsStartTime,
         secrets_retrieved: ['DB_NAME', 'DB_USER', 'DB_PASSWORD'],
         dbNameLength: dbName?.length,
@@ -82,7 +79,7 @@ async function createPoolConfig() {
     };
 
     config.error = (err, client) => {
-      logger.error({
+      console.error({
         error: err,
         client_active: !!client,
         error_code: err.code,
@@ -90,7 +87,7 @@ async function createPoolConfig() {
       }, 'Database pool client error');
     };
 
-    logger.debug({
+    console.debug({
       host: config.host,
       database: config.database,
       user: config.user,
@@ -104,9 +101,10 @@ async function createPoolConfig() {
         require('fs').existsSync(`/cloudsql/${INSTANCE_CONNECTION_NAME}`) : 'N/A'
     }, 'Pool configuration created');
 
+    console.debug('Database configuration determined');
     return config;
   } catch (error) {
-    logger.error({
+    console.error({
       error,
       errorName: error.name,
       errorCode: error.code,
@@ -119,7 +117,7 @@ async function createPoolConfig() {
 
 async function testDatabaseConnection(pool) {
   const startTime = Date.now();
-  logger.info({
+  console.info({
     phase: 'connection_test_start',
     timestamp: new Date().toISOString(),
     pool_config: {
@@ -130,7 +128,7 @@ async function testDatabaseConnection(pool) {
   }, 'Starting database connection test');
 
   const client = await pool.connect();
-  logger.info({
+  console.info({
     phase: 'client_acquired',
     connection_time: Date.now() - startTime
   }, 'Successfully acquired database client');
@@ -148,7 +146,7 @@ async function testDatabaseConnection(pool) {
     ]);
 
     const testDuration = Date.now() - testStartTime;
-    logger.info({
+    console.info({
       phase: 'connection_test_success',
       testDuration,
       pgVersion: versionResult.rows[0]?.version,
@@ -162,7 +160,7 @@ async function testDatabaseConnection(pool) {
       tables: tablesResult.rows
     };
   } catch (error) {
-    logger.error({
+    console.error({
       error,
       errorName: error.name,
       errorCode: error.code,
@@ -176,19 +174,19 @@ async function testDatabaseConnection(pool) {
 }
 
 async function initializePool() {
-  try {
-    logger.info({
-      phase: 'pool_initialization_start',
-      timestamp: new Date().toISOString(),
-      pid: process.pid,
-      memory_usage: process.memoryUsage(),
-      node_env: process.env.NODE_ENV,
-      project_id: process.env.PROJECT_ID,
-      instance_connection_name: INSTANCE_CONNECTION_NAME
-    }, 'Starting database pool initialization');
+  console.info({
+    phase: 'pool_initialization_start',
+    timestamp: new Date().toISOString(),
+    pid: process.pid,
+    memory_usage: process.memoryUsage(),
+    node_env: process.env.NODE_ENV,
+    project_id: process.env.PROJECT_ID,
+    instance_connection_name: INSTANCE_CONNECTION_NAME
+  }, 'Starting database pool initialization');
 
+  try {
     const poolConfig = await createPoolConfig();
-    logger.info({
+    console.info({
       phase: 'pool_config_created',
       config: {
         host: poolConfig.host,
@@ -201,13 +199,13 @@ async function initializePool() {
 
     const poolStartTime = Date.now();
     const pool = new Pool(poolConfig);
-    logger.info({
+    console.info({
       phase: 'pool_instance_created',
       creation_time: Date.now() - poolStartTime
     }, 'Database pool instance created');
     
     const connectionInfo = await testDatabaseConnection(pool);
-    logger.info({
+    console.info({
       phase: 'pool_initialization_complete',
       poolCreationTime: Date.now() - poolStartTime,
       connectionInfo,
@@ -219,7 +217,7 @@ async function initializePool() {
     }, 'Database pool initialized successfully');
 
     pool.on('error', (err, client) => {
-      logger.error({ 
+      console.error({ 
         error: err,
         errorName: err.name,
         errorCode: err.code,
@@ -235,7 +233,7 @@ async function initializePool() {
 
     return pool;
   } catch (error) {
-    logger.error({ 
+    console.error({ 
       error,
       errorName: error.name,
       errorCode: error.code,

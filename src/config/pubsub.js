@@ -1,8 +1,5 @@
 const { PubSub } = require('@google-cloud/pubsub');
-const { getLogger } = require('./logger');
 const { getSecret } = require('./secrets');
-
-const logger = getLogger('pubsub');
 
 // Check if running in development mode
 const isDevelopment = process.env.NODE_ENV === 'development' || !process.env.NODE_ENV;
@@ -23,11 +20,9 @@ let dlqTopic;
  * Initialize PubSub configuration by loading topic names from secrets
  */
 const initializePubSub = async () => {
-  const logger = getLogger('pubsub');
+  console.info('Initializing PubSub configuration');
   
   try {
-    logger.info('Initializing PubSub configuration');
-    
     // Create PubSub client
     const pubSubClient = new PubSub({
       projectId: process.env.PROJECT_ID,
@@ -40,7 +35,7 @@ const initializePubSub = async () => {
     notificationTopic = pubSubClient.topic(notificationTopicName);
     dlqTopic = pubSubClient.topic(dlqTopicName);
     
-    logger.info('PubSub client initialized with topics', {
+    console.info('PubSub client initialized with topics', {
       mode: process.env.NODE_ENV || 'development',
       notification_topic: notificationTopicName,
       dlq_topic: dlqTopicName
@@ -65,7 +60,7 @@ const initializePubSub = async () => {
       emailDailyTopic: null
     };
   } catch (error) {
-    logger.error('Failed to initialize PubSub configuration', {
+    console.error('Failed to initialize PubSub configuration', {
       stack: error.stack,
       error: error.message
     });
@@ -84,7 +79,7 @@ const initializePubSub = async () => {
  */
 async function publishNotificationMessage(subscription, matches, processorType = 'boe') {
   if (!notificationTopic && !isDevelopment) {
-    logger.error('Notification topic not initialized');
+    console.error('Notification topic not initialized');
     throw new Error('Notification topic not initialized. Call initializePubSub first.');
   }
   
@@ -120,7 +115,7 @@ async function publishNotificationMessage(subscription, matches, processorType =
   const validationResult = validatePubSubNotification(message);
   
   if (!validationResult.valid) {
-    logger.warn('PubSub message validation warning', {
+    console.warn('PubSub message validation warning', {
       errors: validationResult.errors,
       subscription_id: subscriptionId,
       processor_type: processorType
@@ -130,7 +125,7 @@ async function publishNotificationMessage(subscription, matches, processorType =
   }
   
   // Log the notification message
-  logger.debug('Publishing notification message', {
+  console.debug('Publishing notification message', {
     trace_id: message.trace_id,
     subscription_id: subscriptionId,
     user_id: userId,
@@ -141,7 +136,7 @@ async function publishNotificationMessage(subscription, matches, processorType =
   // In development mode, just log the message instead of publishing
   if (isDevelopment) {
     const mockMessageId = `dev-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
-    logger.info({
+    console.info({
       messageId: mockMessageId,
       subscription_id: subscriptionId,
       total_matches: matches.length,
@@ -151,7 +146,7 @@ async function publishNotificationMessage(subscription, matches, processorType =
     
     // Log the first match for debugging
     if (matches.length > 0) {
-      logger.debug('First match sample', {
+      console.debug('First match sample', {
         match: JSON.stringify(matches[0]).substring(0, 500)
       });
     }
@@ -165,7 +160,7 @@ async function publishNotificationMessage(subscription, matches, processorType =
     // Use the notificationTopic that was initialized during startup
     const messageId = await notificationTopic.publish(dataBuffer);
     
-    logger.info({
+    console.info({
       messageId,
       subscription_id: subscriptionId,
       total_matches: matches.length,
@@ -174,7 +169,7 @@ async function publishNotificationMessage(subscription, matches, processorType =
     
     return messageId;
   } catch (error) {
-    logger.error({
+    console.error({
       error: error.message,
       stack: error.stack,
       subscription_id: subscriptionId,
@@ -200,13 +195,13 @@ async function publishNotificationMessage(subscription, matches, processorType =
         const dlqBuffer = Buffer.from(JSON.stringify(dlqMessage));
         const dlqMessageId = await dlqTopic.publish(dlqBuffer);
         
-        logger.info({
+        console.info({
           dlqMessageId,
           subscription_id: subscriptionId,
           error: error.message
         }, 'Published failed message to DLQ');
       } catch (dlqError) {
-        logger.error({
+        console.error({
           error: dlqError.message,
           original_error: error.message,
           subscription_id: subscriptionId

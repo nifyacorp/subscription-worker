@@ -6,33 +6,37 @@ const express = require('express');
 
 function createApiRouter(options) {
   const { 
-    subscriptionProcessor,
     pool,
-    parserApiKey 
+    parserApiKey,
+    subscriptionController
   } = options;
   
+  if (!subscriptionController) {
+    throw new Error('createApiRouter requires a subscriptionController in options');
+  }
+
   const router = express.Router();
   
   // Import route handlers
   const createHealthRouter = require('../health');
   const createSubscriptionsRouter = require('./subscriptions');
   const createBOERouter = require('./boe');
-  const createDebugRouter = require('./debug');
+  // Removed require: const createDebugRouter = require('./debug');
   
   // Mount health check route - accessible at /api/health and /api/_health
   router.use(createHealthRouter(pool));
   
   // Mount subscriptions router with proper prefix
-  const subscriptionsRouter = createSubscriptionsRouter(subscriptionProcessor);
+  const subscriptionsRouter = createSubscriptionsRouter(subscriptionController);
   router.use('/subscriptions', subscriptionsRouter);
   
   // Mount BOE router
   router.use('/boe', createBOERouter(parserApiKey));
   
-  // Conditionally mount debug routes
-  if (process.env.NODE_ENV !== 'production' || process.env.ENABLE_DEBUG_ROUTES === 'true') {
-    router.use('/debug', createDebugRouter({ subscriptionProcessor, pool }));
-  }
+  // Conditionally mount debug routes - COMMENTED OUT
+  // if (process.env.NODE_ENV !== 'production' || process.env.ENABLE_DEBUG_ROUTES === 'true') {
+  //   router.use('/debug', createDebugRouter({ subscriptionProcessor, pool }));
+  // }
   
   // Add root level health check routes
   const healthRouter = createHealthRouter(pool);
