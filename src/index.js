@@ -3,7 +3,6 @@
  * Main application entry point
  */
 const express = require('express');
-const expressPino = require('express-pino-logger');
 const { promisify } = require('util');
 require('dotenv').config();
 
