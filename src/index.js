@@ -16,7 +16,7 @@ const {
 const { SubscriptionService } = require('./services/SubscriptionService');
 const { SubscriptionController } = require('./controllers/SubscriptionController');
 const ParserClient = require('./clients/ParserClient');
-const { NotificationClient } = require('./clients/NotificationClient');
+const NotificationClient = require('./clients/NotificationClient');
 const { getSecret } = require('./config/secrets');
 const { setupGracefulShutdown } = require('./utils/process-handlers');
 const { createApiRouter } = require('./routes/api');
