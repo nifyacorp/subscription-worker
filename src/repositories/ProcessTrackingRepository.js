@@ -17,8 +17,8 @@ class ProcessTrackingRepository {
         try {
             const result = await this.pool.query(
                 `INSERT INTO subscription_processing
-                 (subscription_id, status, next_run_at) -- Removed metadata column
-                 VALUES ($1, $2, NOW()) -- Default next_run_at to NOW() or specific logic
+                 (subscription_id, status) -- Removed metadata and next_run_at columns
+                 VALUES ($1, $2) -- Removed NOW() placeholder for next_run_at
                  RETURNING id, subscription_id, status, created_at`, // Return key fields
                 [
                     subscriptionId,
@@ -55,8 +55,10 @@ class ProcessTrackingRepository {
         let queryParams = [status, processingId];
 
         if (status === 'completed' || status === 'error') {
-            setClauses.push('last_run_at = NOW()'); // Update last_run_at on completion/error
-            // Potentially update next_run_at based on frequency if applicable for retries/scheduling
+            // Using 'completed_at' instead of 'last_run_at' which also doesn't exist.
+            // Assuming 'completed_at' serves a similar purpose of marking final run time.
+            setClauses.push('completed_at = NOW()');
+            // Removed comment referring to next_run_at
         }
 
         const query = `UPDATE subscription_processing
@@ -105,9 +107,9 @@ class ProcessTrackingRepository {
                     sp.id as processing_id,
                     sp.subscription_id,
                     sp.status,
-                    sp.next_run_at,
-                    sp.last_run_at,
-                    sp.error,
+                    sp.started_at, -- Added started_at if needed
+                    sp.completed_at, -- Added completed_at instead of last_run_at
+                    sp.error_message, -- Corrected field name from 'error'
                     s.user_id,
                     s.type_id as subscription_type_id, -- Updated from type for clarity
                     t.name as type_name, -- Added type name from subscription_types
@@ -122,7 +124,7 @@ class ProcessTrackingRepository {
                 JOIN subscriptions s ON s.id = sp.subscription_id
                 JOIN subscription_types t ON t.id = s.type_id -- Added join for subscription type details
                 WHERE sp.status = 'pending' -- Or other relevant statuses like 'queued', 'retry'
-                ORDER BY sp.next_run_at ASC
+                ORDER BY sp.created_at ASC -- Changed order from next_run_at to created_at
             `);
             
             console.info(`Found ${result.rowCount} pending processing records.`);
