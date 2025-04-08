@@ -99,8 +99,7 @@ class SubscriptionController {
                         // Update processing record with error status
                         await this.processTrackingRepository.updateStatus(
                             processingId, 
-                            'error',
-                            { error: processingError.message }
+                            'error'
                         );
                     } catch (updateError) {
                         console.error('Failed to update processing status after error', {
