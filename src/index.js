@@ -19,7 +19,7 @@ const ParserClient = require('./clients/ParserClient');
 const NotificationClient = require('./clients/NotificationClient');
 const { getSecret } = require('./config/secrets');
 const { setupGracefulShutdown } = require('./utils/process-handlers');
-const { createApiRouter } = require('./routes/api');
+const createApiRouter = require('./routes/api/index');
 const { createHealthRouter } = require('./routes/health');
 
 // Constants
