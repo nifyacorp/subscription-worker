@@ -14,6 +14,31 @@ class ParserClient {
     }
 
     /**
+     * Updates the base URL of the parser client.
+     * If the client is already initialized, it will be re-initialized with the new URL.
+     * @param {string} newBaseUrl - The new base URL to use
+     */
+    async updateBaseURL(newBaseUrl) {
+        // If no URL is provided or it's the same as current, do nothing
+        if (!newBaseUrl || newBaseUrl === this.parserBaseUrl) {
+            return;
+        }
+
+        console.info('Updating parser base URL', { 
+            previous_url: this.parserBaseUrl,
+            new_url: newBaseUrl
+        });
+        
+        this.parserBaseUrl = newBaseUrl;
+        
+        // If already initialized, re-initialize with new URL
+        if (this.isInitialized) {
+            this.isInitialized = false; // Mark as uninitialized
+            await this.initialize(); // Re-initialize with new URL
+        }
+    }
+
+    /**
      * Initializes the underlying BOE parser client, fetching API key if necessary.
      * Should be called before making requests.
      */
@@ -37,16 +62,16 @@ class ParserClient {
             this.boeClient = new BoeParserClient({
                 baseURL: this.parserBaseUrl,
                 apiKey: this.parserApiKey,
-                type: 'boe', // Assuming type is always BOE for this context
+                type: 'boe' // Type is set to boe for now, this is for the client's internal type identification
             });
 
-            console.info('BOE Parser client configured', { 
+            console.info('Parser client configured', { 
                 base_url: this.parserBaseUrl, 
                 api_key_present: !!this.parserApiKey 
             });
             this.isInitialized = true;
         } catch (error) {
-            console.error('Failed to initialize BOE Parser client', { error: error.message });
+            console.error('Failed to initialize Parser client', { error: error.message });
             throw error; // Re-throw initialization error
         }
     }

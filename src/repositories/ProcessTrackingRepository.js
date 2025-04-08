@@ -101,6 +101,19 @@ class ProcessTrackingRepository {
     }
 
     /**
+     * Updates the status of a processing record.
+     * This is an alias for updateRecordStatus to maintain compatibility with the controller.
+     * 
+     * @param {string} processingId - The ID of the processing record
+     * @param {string} status - The new status
+     * @param {Object} [metadataUpdates={}] - Additional metadata
+     * @returns {Promise<Object>} The updated processing record
+     */
+    async updateStatus(processingId, status, metadataUpdates = {}) {
+        return this.updateRecordStatus(processingId, status, metadataUpdates);
+    }
+
+    /**
      * Finds pending processing records, potentially joining with subscription details.
      * @returns {Promise<Array<Object>>} A list of pending processing records.
      */
@@ -118,17 +131,18 @@ class ProcessTrackingRepository {
                     sp.metadata,
                     sp.error,
                     s.user_id,
-                    s.type as subscription_type, -- Renamed from type_id/type_name for clarity
-                    -- st.name as type_name, -- Removed join unless type_name is essential here
+                    s.type_id as subscription_type_id, -- Updated from type for clarity
+                    t.name as type_name, -- Added type name from subscription_types
+                    t.parser_url, -- Added parser URL for type info
                     s.active as subscription_active,
                     s.prompts,
-                    -- s.frequency, -- Add if needed
-                    s.last_processed_at as subscription_last_processed_at, -- Renamed
+                    s.frequency, -- Added as it might be useful for scheduling
+                    s.last_processed_at as subscription_last_processed_at,
                     s.created_at as subscription_created_at,
                     s.updated_at as subscription_updated_at
                 FROM subscription_processing sp
                 JOIN subscriptions s ON s.id = sp.subscription_id
-                -- JOIN subscription_types st ON st.id = s.type_id -- Removed join
+                JOIN subscription_types t ON t.id = s.type_id -- Added join for subscription type details
                 WHERE sp.status = 'pending' -- Or other relevant statuses like 'queued', 'retry'
                 ORDER BY sp.next_run_at ASC
             `);
@@ -144,4 +158,4 @@ class ProcessTrackingRepository {
      // Add other methods like findById, deleteRecord etc. if necessary
 }
 
-module.exports = ProcessTrackingRepository; 
+module.exports = { ProcessTrackingRepository }; 

@@ -15,7 +15,7 @@ class NotificationRepository {
      * @param {string} notificationData.content
      * @param {string} notificationData.source_url
      * @param {Object} notificationData.metadata
-     * @param {string} notificationData.entity_type
+     * @param {string} [notificationData.entity_type]
      * @param {Date} [notificationData.created_at] - Optional creation date, defaults to NOW()
      * @returns {Promise<Object>} The created notification object (including its ID).
      */
@@ -47,7 +47,7 @@ class NotificationRepository {
                   content,
                   source_url || '',
                   JSON.stringify(metadata || {}),
-                  entity_type,
+                  entity_type || 'subscription', // Default to 'subscription' if not provided
                   created_at || new Date() // Use provided date or default to now
                 ]
             );
@@ -66,10 +66,34 @@ class NotificationRepository {
         }
     }
 
+    /**
+     * Creates a new notification from match data.
+     * This method provides a simpler interface used by the SubscriptionService.
+     * 
+     * @param {Object} notificationData - Notification data with match information
+     * @returns {Promise<Object>} The created notification
+     */
+    async createNotification(notificationData) {
+        // Determine entity type based on document_type if available
+        const documentType = notificationData.metadata?.document_type || 'document';
+        const entityType = `${documentType.toLowerCase()}`;
+        
+        // Create standardized notification data
+        return this.create({
+            user_id: notificationData.user_id,
+            subscription_id: notificationData.subscription_id,
+            title: notificationData.title,
+            content: notificationData.content,
+            source_url: notificationData.source_url || '',
+            metadata: notificationData.metadata || {},
+            entity_type: entityType
+        });
+    }
+
     // Add other methods as needed, e.g.:
     // async findById(notificationId) { ... }
     // async findByUserId(userId, options) { ... }
     // async markAsRead(notificationId) { ... }
 }
 
-module.exports = NotificationRepository; 
+module.exports = { NotificationRepository }; 

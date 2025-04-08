@@ -78,23 +78,44 @@ class ParserClient {
    * @param {string} [config.apiKey] - API key for authentication
    * @param {string} [config.type] - Parser type (e.g., 'boe', 'doga')
    */
-  constructor(config) {
-    if (!config || !config.baseURL) {
-      throw new Error('ParserClient requires a baseURL');
-    }
-
-    this.config = config;
-    this.baseURL = config.baseURL;
+  constructor(config = {}) {
+    this.config = config || {};
+    this.baseURL = config.baseURL || process.env.PARSER_BASE_URL || '';
     this.apiKey = config.apiKey || '';
     this.type = config.type || 'generic';
     
-    // Create agents for keep-alive connections
+    // Check if we should initialize now or wait for updateBaseURL
+    if (this.baseURL) {
+      // Create agents for keep-alive connections
+      this._setupAgents();
+      
+      // Create axios client with standardized configuration
+      this.client = this._createAxiosClient();
+      
+      this._initializeClient();
+    } else {
+      console.warn('ParserClient initialized without baseURL. Client will need updateBaseURL before use.');
+    }
+  }
+  
+  /**
+   * Setup HTTP/HTTPS agents for the client
+   * @private
+   */
+  _setupAgents() {
     const isHttps = this.baseURL.startsWith('https://');
     this.httpAgent = createKeepAliveAgent(!isHttps);
     this.httpsAgent = createKeepAliveAgent(isHttps);
-    
-    // Create axios client with standardized configuration
-    this.client = axios.create({
+  }
+  
+  /**
+   * Create an axios client with standardized configuration
+   * @private
+   * @returns {Object} Configured axios instance
+   */
+  _createAxiosClient() {
+    const isHttps = this.baseURL.startsWith('https://');
+    return axios.create({
       baseURL: this.baseURL,
       timeout: DEFAULT_TIMEOUT,
       httpAgent: this.httpAgent,
@@ -108,11 +129,90 @@ class ParserClient {
       maxContentLength: 50 * 1024 * 1024, // 50MB
       maxRedirects: 5
     });
+  }
+
+  /**
+   * Initialize the API key for the parser client
+   * @param {string} apiKey - The API key to use
+   */
+  async initialize(apiKey = null) {
+    if (apiKey) {
+      this.apiKey = apiKey;
+      // Recreate client if it exists
+      if (this.client) {
+        this.client = this._createAxiosClient();
+        this._initializeClient();
+      }
+    }
     
-    this._initializeClient(config);
+    console.debug('Parser client initialized', { 
+      type: this.type, 
+      baseURL: this.baseURL || 'not set yet', 
+      hasApiKey: !!this.apiKey 
+    });
+    
+    return this;
+  }
+
+  /**
+   * Update the base URL for this parser client
+   * @param {string} newBaseURL - New base URL to use
+   * @returns {Promise<void>}
+   */
+  async updateBaseURL(newBaseURL) {
+    if (!newBaseURL) {
+      console.warn('Attempted to update base URL with empty value, ignoring');
+      return;
+    }
+    
+    if (newBaseURL === this.baseURL) {
+      console.debug('Base URL unchanged, no update needed');
+      return; // No change needed
+    }
+    
+    console.info('Updating parser client base URL', { 
+      old: this.baseURL || 'not set', 
+      new: newBaseURL,
+      type: this.type
+    });
+    
+    // Save the new URL
+    this.baseURL = newBaseURL;
+    
+    // Clean up existing agents if they exist
+    this._closeAgents();
+    
+    // Setup new agents
+    this._setupAgents();
+    
+    // Recreate the axios client with the new URL
+    this.client = this._createAxiosClient();
+    this._initializeClient();
+    
+    console.info('Parser client base URL updated successfully', { baseURL: this.baseURL });
   }
   
-  _initializeClient(config) {
+  /**
+   * Close existing HTTP agents
+   * @private
+   */
+  _closeAgents() {
+    if (this.httpAgent) {
+      this.httpAgent.destroy();
+      this.httpAgent = null;
+    }
+    
+    if (this.httpsAgent) {
+      this.httpsAgent.destroy();
+      this.httpsAgent = null;
+    }
+  }
+  
+  /**
+   * Initialize client interceptors
+   * @private
+   */
+  _initializeClient() {
     // Configure interceptors for logging
     this.client.interceptors.request.use((reqConfig) => {
       console.debug('ParserClient: Outgoing request', { method: reqConfig.method, url: reqConfig.url });
@@ -135,7 +235,7 @@ class ParserClient {
       }
     );
 
-    console.debug('Parser client initialized', { type: this.type, baseURL: this.baseURL });
+    console.debug('Parser client interceptors initialized', { type: this.type, baseURL: this.baseURL });
   }
   
   /**
@@ -191,6 +291,10 @@ class ParserClient {
    * @returns {Promise<Object>} Normalized response
    */
   async send(requestBody, options = {}) {
+    if (!this.baseURL || !this.client) {
+      throw new Error('ParserClient: Cannot send request - no baseURL set or client not initialized');
+    }
+    
     const endpoint = options.endpoint || '/analyze-text';
     let retries = 0;
     let lastError = null;
@@ -199,7 +303,7 @@ class ParserClient {
     // Extract the subscription ID for logging
     const subscriptionId = requestBody.metadata?.subscription_id || 'unknown';
     
-    console.info('Sending request to parser', { endpoint, type: this.type });
+    console.info('Sending request to parser', { endpoint, type: this.type, baseURL: this.baseURL });
     
     while (retries <= MAX_RETRIES) {
       try {
@@ -344,13 +448,7 @@ class ParserClient {
    * Close any persistent connections
    */
   close() {
-    if (this.httpAgent) {
-      this.httpAgent.destroy();
-    }
-    
-    if (this.httpsAgent) {
-      this.httpsAgent.destroy();
-    }
+    this._closeAgents();
     
     // Cancel any pending requests
     if (this.client) {

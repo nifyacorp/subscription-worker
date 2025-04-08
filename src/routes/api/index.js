@@ -26,11 +26,11 @@ function createApiRouter(options) {
   // Mount health check route - accessible at /api/health and /api/_health
   router.use(createHealthRouter(pool));
   
-  // Mount subscriptions router with proper prefix
+  // Mount subscriptions router with proper prefix - this is the primary API path
   const subscriptionsRouter = createSubscriptionsRouter(subscriptionController);
   router.use('/subscriptions', subscriptionsRouter);
   
-  // Mount BOE router
+  // Mount BOE router - will be eventually deprecated as we move to dynamic parser selection
   router.use('/boe', createBOERouter(parserApiKey));
   
   // Conditionally mount debug routes - COMMENTED OUT

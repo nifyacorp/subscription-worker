@@ -10,6 +10,7 @@ The codebase has been recently refactored to follow a clearer architectural patt
 
 - Asynchronous processing of individual subscriptions via API endpoint.
 - Batch processing capabilities for pending subscriptions.
+- **Dynamic parser selection** based on subscription type.
 - Integration with an external parser service (e.g., BOE Parser) to analyze documents based on prompts.
 - Creation of notifications in the database for matched documents.
 - Optional publishing of notification events to a Pub/Sub topic for real-time updates.
@@ -18,6 +19,42 @@ The codebase has been recently refactored to follow a clearer architectural patt
 - Graceful shutdown handling.
 - Health check endpoint.
 - Mock database mode for development environments when a real database is unavailable.
+
+## Parser Service Protocol
+
+All parser services (BOE, DOGA, etc.) follow the same standardized protocol for communication:
+
+### Parser Input Schema
+
+All parsers accept requests in the following format:
+
+```json
+{
+  "texts": ["search term 1", "search term 2"],
+  "metadata": {
+    "user_id": "UUID",
+    "subscription_id": "UUID"
+  },
+  "date": "2025-04-04"  // Optional, defaults to current date
+}
+```
+
+- **texts**: Array of search terms/prompts to analyze
+- **metadata**: Contains user and subscription identifiers
+- **date**: Optional date to search documents for (defaults to current date)
+
+### Parser Endpoints
+
+- **Primary Endpoint**: `/analyze-text` - Used for analyzing documents based on prompts
+- **Test/Debug Endpoints**: `/test-analyze` or `/test-pubsub` - Used for testing and debugging
+
+### Example Prompts
+
+Example prompt texts include:
+- "Ayuntamiento Barcelona licitaciones" (Barcelona City Council tenders)
+- "Subvenciones cultura" (Culture subsidies/grants)
+
+These prompts are semantically analyzed against official bulletin content to find relevant matches. The parser services process these matches and return detailed match information.
 
 ## Refactored Architecture
 
@@ -33,6 +70,18 @@ The service now follows a more layered architecture:
 - **`src/middleware`**: Reusable Express middleware functions (e.g., validation logic).
 - **`src/utils`**: Shared utility functions (e.g., the `parser-protocol` helper).
 
+### Dynamic Parser Selection
+
+The subscription worker now dynamically determines which parser service to use based on the subscription type. This process works as follows:
+
+1. When a subscription processing request is received at `/api/subscriptions/process/:id`, the worker retrieves the subscription from the database
+2. The subscription includes a `type_id` field that references the `subscription_types` table
+3. The worker joins with the `subscription_types` table to get the associated `parser_url` for that subscription type
+4. The `ParserClient` is dynamically configured with the correct parser URL before processing the subscription
+5. The request is then sent to the appropriate parser service (e.g., BOE parser, DOGA parser)
+
+This approach allows for easy addition of new parser services without code changes - simply add a new entry to the `subscription_types` table with the appropriate `parser_url`.
+
 ### Functionality Flow (Example: Process Single Subscription)
 
 ```mermaid
@@ -46,16 +95,17 @@ graph LR
     D -- 3. Trigger Async --> G[SubscriptionService];
     G -- 4. Find Subscription --> H[SubscriptionRepository];
     H -- DB Read --> F;
-    G -- 5. Call Parser --> I[ParserClient];
-    I -- HTTP Request --> J[(External Parser Service)];
+    G -- 5. Get Subscription Type Details --> F;
+    G -- 6. Configure Parser Client --> I[ParserClient];
+    I -- HTTP Request --> J[(Appropriate Parser Service)];
     J -- HTTP Response --> I;
-    G -- 6. Save Notification --> K[NotificationRepository];
+    G -- 7. Save Notification --> K[NotificationRepository];
     K -- DB Write --> F;
-    G -- 7. Publish Notification? --> L[NotificationClient];
+    G -- 8. Publish Notification? --> L[NotificationClient];
     L -- Pub/Sub Publish --> M[(Google Pub/Sub)];
-    G -- 8. Update Subscription Status --> H;
+    G -- 9. Update Subscription Status --> H;
     H -- DB Write --> F;
-    G -- 9. Update Process Record --> E;
+    G -- 10. Update Process Record --> E;
     E -- DB Write --> F;
 
     style F fill:#f9f,stroke:#333,stroke-width:2px
@@ -70,11 +120,9 @@ graph LR
 ### Core Endpoints (mounted under `/api`)
 
 - `GET /health` - Check service and database connection health.
-- `POST /subscriptions/process/:id` - Queues a specific subscription for asynchronous processing. Responds with `202 Accepted` on success.
-- `GET /subscriptions/pending` - Retrieves a list of subscription processing records currently in a pending state.
-- `POST /subscriptions/batch/process` - Triggers the processing of pending subscriptions (implementation might be basic).
-
-*(Refer to `src/routes/api/index.js` and associated router files for exact definitions and potential future endpoints like BOE-specific or Debug routes)*
+- `POST /api/subscriptions/process/:id` - Queues a specific subscription for asynchronous processing. Responds with `202 Accepted` on success. This is the **primary and preferred endpoint** for triggering subscription processing.
+- `GET /api/subscriptions/pending` - Retrieves a list of subscription processing records currently in a pending state.
+- `POST /api/subscriptions/batch/process` - Triggers the processing of pending subscriptions (implementation might be basic).
 
 ## Setup & Development
 
@@ -110,7 +158,9 @@ PGDATABASE=your_db_name
 # DATABASE_URL=postgresql://user:password@host:port/database
 
 # External Services
-PARSER_BASE_URL=https://your-parser-service-url # URL of the external BOE parser
+# Note: Parser URLs are now fetched dynamically from subscription_types table
+# PARSER_BASE_URL is only used as a fallback if no parser_url is found in the subscription_types table
+PARSER_BASE_URL=https://your-parser-service-url # Fallback URL for the external parser
 NOTIFICATION_TOPIC=subscription-notifications # Name of the Pub/Sub topic for notifications
 
 # Secrets (These are typically *names* of secrets in Secret Manager, not the values themselves)
@@ -122,6 +172,27 @@ PARSER_API_KEY_SECRET_NAME=PARSER_API_KEY # Name of the secret holding the parse
 ```
 
 *Note: Secrets like API keys and database passwords should ideally be managed via Google Secret Manager in production environments. The application reads secrets based on the `*_SECRET_NAME` variables.* 
+
+### Subscription Types Configuration
+
+To add a new parser service:
+
+1. Add a new entry to the `subscription_types` table with the appropriate details:
+
+```sql
+INSERT INTO subscription_types (id, name, display_name, parser_url, description, icon, is_system)
+VALUES (
+  'new-parser-type', 
+  'new-parser', 
+  'New Parser Display Name', 
+  'https://new-parser-service-url.example.com',
+  'Description of the new parser service',
+  'IconName', 
+  true
+);
+```
+
+2. Create subscriptions that reference this subscription type via the `type_id` field.
 
 ### Installation
 

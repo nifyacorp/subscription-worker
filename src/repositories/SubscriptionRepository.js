@@ -1,3 +1,6 @@
+/**
+ * Repository for subscription data access
+ */
 class SubscriptionRepository {
     constructor(pool) {
         if (!pool) {
@@ -16,58 +19,115 @@ class SubscriptionRepository {
         try {
             const result = await this.pool.query(
                 `SELECT 
-                  id, 
-                  user_id, 
-                  name, 
-                  type, 
-                  metadata, 
-                  prompts,
-                  date_range, -- Assuming 'type' corresponds to subscription type, adjust if needed
-                  notification_preference,
-                  created_at, 
-                  updated_at, 
-                  last_processed_at
-                  -- Add type_id, active, frequency, last_check_at if they are part of the core subscription model needed by the service
-                  -- Example: s.type_id, s.active, s.frequency, s.last_check_at
+                  s.id, 
+                  s.user_id, 
+                  s.name, 
+                  s.prompts,
+                  s.frequency,
+                  s.last_processed_at,
+                  t.id as type_id,
+                  t.name as type_name,
+                  t.parser_url,
+                  t.logo_url,
+                  t.description as type_description
                 FROM subscriptions s 
-                -- Potentially JOIN subscription_types st ON st.id = s.type_id if type name is needed
+                JOIN subscription_types t ON t.id = s.type_id
                 WHERE s.id = $1`,
                 [subscriptionId]
             );
             
-            if (result.rowCount === 0) {
-                console.warn('Subscription not found', { subscription_id: subscriptionId });
+            if (result.rows.length === 0) {
+                console.warn('No subscription found with ID', { subscription_id: subscriptionId });
                 return null;
             }
             
-            return result.rows[0];
+            const subscription = result.rows[0];
+            console.debug('Found subscription', { 
+                subscription_id: subscription.id,
+                user_id: subscription.user_id,
+                type_id: subscription.type_id,
+                type_name: subscription.type_name,
+                has_parser_url: !!subscription.parser_url
+            });
+            
+            return subscription;
         } catch (error) {
-            console.error('Error retrieving subscription by ID', { error: error.message });
-            throw error; // Re-throw the error to be handled by the service layer
+            console.error('Error finding subscription by ID', { 
+                subscription_id: subscriptionId,
+                error: error.message,
+                code: error.code
+            });
+            throw error;
         }
     }
 
     /**
-     * Update the last_processed_at timestamp for a subscription.
+     * Update the last processed timestamp for a subscription.
      * @param {string} subscriptionId - The ID of the subscription to update.
-     * @returns {Promise<boolean>} True if update was successful, false otherwise.
+     * @returns {Promise<void>}
      */
     async updateLastProcessed(subscriptionId) {
-        console.debug('Updating subscription last_processed_at', { subscription_id: subscriptionId });
         try {
-            const result = await this.pool.query(
-                `UPDATE subscriptions
-                 SET last_processed_at = NOW(),
-                     updated_at = NOW()
-                 WHERE id = $1`,
+            await this.pool.query(
+                `UPDATE subscriptions 
+                SET last_processed_at = NOW()
+                WHERE id = $1`,
                 [subscriptionId]
             );
-            
-            return result.rowCount > 0;
+            console.debug('Updated subscription last_processed_at', { subscription_id: subscriptionId });
         } catch (error) {
-            console.error('Failed to update subscription last_processed_at', { error: error.message });
-            // Decide whether to throw or return false based on desired service behavior
-            throw error; 
+            console.error('Error updating subscription last_processed_at', { 
+                subscription_id: subscriptionId,
+                error: error.message,
+                code: error.code
+            });
+            throw error;
+        }
+    }
+
+    /**
+     * Find subscriptions that need processing.
+     * @param {Object} options - Options for finding pending subscriptions.
+     * @param {number} options.limit - Maximum number of subscriptions to return.
+     * @param {string} options.frequency - Filter by frequency (e.g., 'daily', 'weekly').
+     * @returns {Promise<Array>} List of subscription IDs that need processing.
+     */
+    async findPendingSubscriptions({ limit = 10, frequency = 'daily' } = {}) {
+        try {
+            // This query finds subscriptions that haven't been processed recently based on their frequency
+            const result = await this.pool.query(
+                `SELECT s.id, s.user_id, s.name, s.frequency, s.last_processed_at, 
+                        t.id as type_id, t.name as type_name, t.parser_url
+                 FROM subscriptions s
+                 JOIN subscription_types t ON t.id = s.type_id
+                 WHERE s.active = true
+                 AND (
+                     s.last_processed_at IS NULL
+                     OR (
+                         s.frequency = 'daily' AND s.last_processed_at < NOW() - INTERVAL '1 day'
+                     )
+                     OR (
+                         s.frequency = 'weekly' AND s.last_processed_at < NOW() - INTERVAL '7 days'
+                     )
+                     OR (
+                         s.frequency = 'monthly' AND s.last_processed_at < NOW() - INTERVAL '30 days'
+                     )
+                 )
+                 -- For a specific frequency: AND s.frequency = $1
+                 ORDER BY s.last_processed_at ASC NULLS FIRST
+                 LIMIT $1`,
+                [limit]
+            );
+            
+            return result.rows;
+        } catch (error) {
+            console.error('Error finding pending subscriptions', { 
+                error: error.message,
+                code: error.code,
+                limit,
+                frequency
+            });
+            throw error;
         }
     }
 
@@ -76,4 +136,4 @@ class SubscriptionRepository {
     // async updateStatus(subscriptionId, status) { ... }
 }
 
-module.exports = SubscriptionRepository; 
+module.exports = { SubscriptionRepository }; 

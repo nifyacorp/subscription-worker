@@ -34,6 +34,7 @@ function createSubscriptionsRouter(subscriptionController) {
   /**
    * POST /api/subscriptions/process/:id
    * Queue a specific subscription for processing.
+   * This is the primary and preferred endpoint for subscription processing.
    */
   router.post(
     '/process/:id', 
@@ -51,11 +52,7 @@ function createSubscriptionsRouter(subscriptionController) {
     validateBatchRequest, // Keep validation middleware if applicable
     subscriptionController.processBatchSubscriptions // Delegate to controller method
   );
-   console.debug('Registered POST /batch/process');
-
-  // --- Remove old helper functions --- 
-  // The createProcessingRecord and updateProcessingStatus functions 
-  // have been moved to the ProcessTrackingRepository.
+  console.debug('Registered POST /batch/process');
   
   console.info('Subscription API routes registered successfully');
   return router;

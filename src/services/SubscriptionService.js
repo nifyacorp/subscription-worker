@@ -108,7 +108,12 @@ class SubscriptionService {
       console.error('Subscription not found', { subscription_id: subscriptionId });
       throw new Error(`Subscription not found: ${subscriptionId}`);
     }
-    console.info('Retrieved subscription details', { subscription_id: subscriptionId });
+    console.info('Retrieved subscription details', { 
+      subscription_id: subscriptionId,
+      type_id: subscription.type_id,
+      type_name: subscription.type_name,
+      parser_url: subscription.parser_url || 'not specified'
+    });
     return subscription;
   }
 
@@ -116,37 +121,58 @@ class SubscriptionService {
   async _fetchParserResults(subscription, traceId) {
     const prompts = this._validatePrompts(subscription.prompts);
     
-    const requestData = this.parserClient.createRequest(
-      prompts,
-      subscription.user_id,
-      subscription.id,
-      {
-        limit: subscription.match_limit || DEFAULT_MATCH_LIMIT,
-        date: new Date().toISOString().split('T')[0] // Consider making date configurable
-      }
-    );
-
-    console.debug('Sending request to parser', { subscription_id: subscription.id });
-    const parserResult = await this.parserClient.send(requestData);
-
-    console.info('Parser processing completed', { subscription_id: subscription.id, status: parserResult.status });
-
-    return parserResult;
-  }
-
-  /** Validate and normalize subscription prompts */
-  _validatePrompts(prompts) {
-    if (!prompts || !Array.isArray(prompts) || prompts.length === 0) {
-      console.warn('No valid prompts found, using defaults');
-      return DEFAULT_PROMPTS;
+    // Check if we have a parser URL from the subscription type
+    if (!subscription.parser_url) {
+      console.warn('No parser URL available for subscription type', { 
+        subscription_id: subscription.id,
+        type_name: subscription.type_name || 'unknown',
+        type_id: subscription.type_id
+      });
+      // Fall back to the default parser URL if not specified in subscription_types
     }
     
-    const validated = prompts
-      .filter(prompt => typeof prompt === 'string' && prompt.trim().length > 0)
-      .map(prompt => prompt.trim())
-      .filter(prompt => prompt.length >= 3); // Minimum 3 chars
-      
-    return validated.length > 0 ? validated : DEFAULT_PROMPTS;
+    // Configure the parser client with the correct URL from subscription_types
+    if (subscription.parser_url) {
+      await this.parserClient.updateBaseURL(subscription.parser_url);
+      console.info('Using parser URL from subscription type', {
+        subscription_id: subscription.id,
+        parser_url: subscription.parser_url,
+        type_name: subscription.type_name
+      });
+    } else {
+      console.warn('Using default parser URL (no type-specific URL found)', {
+        subscription_id: subscription.id
+      });
+    }
+    
+    // Create a standardized request according to the parser protocol
+    // All parsers use the same protocol regardless of subscription type
+    const requestData = {
+      texts: prompts,
+      metadata: {
+        user_id: subscription.user_id,
+        subscription_id: subscription.id
+      },
+      date: new Date().toISOString().split('T')[0] // Use today's date in ISO format
+    };
+
+    console.debug('Sending request to parser', { 
+      subscription_id: subscription.id,
+      parser_url: subscription.parser_url,
+      type_name: subscription.type_name,
+      prompts: prompts
+    });
+    
+    // Send the request to the parser service
+    const parserResult = await this.parserClient.send(requestData);
+
+    console.info('Parser processing completed', { 
+      subscription_id: subscription.id, 
+      status: parserResult.status,
+      entries_count: parserResult.entries?.length || 0 
+    });
+
+    return parserResult;
   }
   
   /** Process parser entries into a standardized match format */
@@ -179,118 +205,152 @@ class SubscriptionService {
     
     return matches;
   }
-
-  /** Generate a fallback notification title */
-  _generateNotificationTitle(doc) {
-     // Prefer explicit notification title
-    if (doc.notification_title && typeof doc.notification_title === 'string' && doc.notification_title.length > 3 && !doc.notification_title.includes('notification')) {
-      return doc.notification_title;
+  
+  /** Validate and normalize prompts */
+  _validatePrompts(prompts) {
+    if (!prompts || (Array.isArray(prompts) && prompts.length === 0)) {
+      console.warn('No prompts found in subscription, using defaults');
+      return DEFAULT_PROMPTS;
     }
-    // Fallback to original title (truncated)
-    if (doc.title && typeof doc.title === 'string' && doc.title.length > 3 && !doc.title.includes('notification')) {
-      return doc.title.length > 80 ? doc.title.substring(0, 77) + '...' : doc.title;
+    
+    // Handle different prompt formats
+    if (typeof prompts === 'string') {
+      try {
+        // Try to parse JSON string
+        const parsed = JSON.parse(prompts);
+        if (Array.isArray(parsed)) {
+          return parsed;
+        }
+        // Single string as JSON object
+        return [prompts];
+      } catch (e) {
+        // Not JSON, treat as a single string
+        return [prompts];
+      }
     }
-    // Construct title from type/issuer/date
-    if (doc.document_type) {
-      const docType = doc.document_type || 'Documento';
-      const issuer = doc.issuing_body || doc.department || '';
-      const date = doc.dates?.publication_date ? ` (${doc.dates.publication_date})` : '';
-      return `${docType}${issuer ? ' de ' + issuer : ''}${date}`;
+    
+    if (Array.isArray(prompts)) {
+      // Filter out any non-string items and empty strings
+      return prompts
+        .filter(p => typeof p === 'string' && p.trim().length > 0)
+        .map(p => p.trim());
     }
-    // Absolute fallback
-    return `Alerta BOE: ${new Date().toLocaleDateString()}`;
+    
+    // Fallback to defaults if none of the above worked
+    console.warn('Could not parse prompts, using defaults');
+    return DEFAULT_PROMPTS;
   }
   
-  /** Create notifications in the DB and publish events */
+  /** Create a notification title if one wasn't provided */
+  _generateNotificationTitle(entry) {
+    if (entry.title) {
+      return entry.title;
+    }
+    
+    if (entry.issuing_body && entry.document_type) {
+      return `${entry.document_type} de ${entry.issuing_body}`;
+    }
+    
+    if (entry.document_type) {
+      return `Nuevo ${entry.document_type}`;
+    }
+    
+    return 'Nueva publicación encontrada';
+  }
+  
+  /** Handle creating and publishing notifications for matches */
   async _handleNotifications(subscription, matches, traceId) {
     if (!matches || matches.length === 0) {
       console.info('No matches to create notifications for', { subscription_id: subscription.id });
       return { created: 0, errors: 0 };
     }
-
-    let notificationsCreated = 0;
-    let errors = 0;
-    console.info('Starting notification creation process', { match_count: matches.length });
-
+    
+    console.info('Creating notifications for matches', { 
+      subscription_id: subscription.id, 
+      match_count: matches.length 
+    });
+    
+    const results = { created: 0, errors: 0 };
+    
     for (const match of matches) {
       try {
-        const notificationData = this._prepareNotificationData(subscription, match, traceId);
-        
-        // 1. Save to Database
-        const savedNotification = await this.notificationRepository.create(notificationData);
-        console.info('Saved notification to DB', { notification_id: savedNotification.id });
-        notificationsCreated++;
-
-        // 2. Publish Event (if client configured)
-        if (this.notificationClient) {
-          try {
-             // Prepare data specifically for the event (might differ slightly from DB)
-            const eventData = {
-                id: savedNotification.id,
-                user_id: savedNotification.user_id,
-                subscription_id: savedNotification.subscription_id,
-                title: savedNotification.title,
-                content: savedNotification.content,
-                document_type: match.document_type, // Get from original match if needed
-                entity_type: notificationData.entity_type,
-                source_url: notificationData.source_url,
-                created_at: new Date(savedNotification.created_at).toISOString(),
-                trace_id: traceId
-            };
-            await this.notificationClient.publishNotification(eventData);
-            console.info('Published notification event', { notification_id: savedNotification.id });
-          } catch (publishError) {
-            errors++; // Count publish error as a partial failure for this match
-            console.warn('Failed to publish notification event', { error: publishError.message });
-            // Decide if this should be a fatal error for the match or just logged
-          }
-        }
-      } catch (dbError) {
-        errors++;
-        console.error('Failed to create notification in DB', { error: dbError.message });
-        // Continue to next match
-      }
-    }
-    
-    console.info('Notification creation completed', { created: notificationsCreated, errors: errors });
-    return { created: notificationsCreated, errors };
-  }
-
-  /** Prepare data for inserting a notification */
-  _prepareNotificationData(subscription, match, traceId) {
-      const notificationTitle = match.notification_title; // Already generated
-      const entityType = `boe:${match.document_type?.toLowerCase() || 'document'}`;
-
-      return {
+        // Create the notification in the database
+        const notification = await this.notificationRepository.createNotification({
           user_id: subscription.user_id,
           subscription_id: subscription.id,
-          title: notificationTitle,
+          title: match.notification_title || match.title,
           content: match.summary,
           source_url: match.links?.html || '',
           metadata: {
-            prompt: match.prompt,
-            relevance: match.relevance_score,
             document_type: match.document_type,
-            original_title: match.title,
-            publication_date: match.publication_date,
             issuing_body: match.issuing_body,
-            section: match.section,
+            publication_date: match.publication_date,
+            relevance_score: match.relevance_score,
+            prompt: match.prompt,
             department: match.department,
-            trace_id: traceId
-          },
-          entity_type: entityType,
-          created_at: new Date() // Repository might handle this
-      };
+            section: match.section,
+            processing_trace_id: traceId
+          }
+        });
+        
+        console.debug('Created notification', { 
+          notification_id: notification.id, 
+          subscription_id: subscription.id
+        });
+        
+        // Optionally publish to Pub/Sub if configured
+        if (this.notificationClient && this.notificationClient.isEnabled) {
+          try {
+            await this.notificationClient.publishNotification({
+              id: notification.id,
+              user_id: subscription.user_id,
+              subscription_id: subscription.id,
+              title: notification.title,
+              content: notification.content,
+              source_url: notification.source_url,
+              created_at: notification.created_at
+            });
+            
+            console.debug('Published notification event', { 
+              notification_id: notification.id 
+            });
+          } catch (pubsubError) {
+            console.error('Failed to publish notification event', {
+              notification_id: notification.id,
+              error: pubsubError.message
+            });
+            // Don't fail the whole process if pub/sub fails
+          }
+        }
+        
+        results.created++;
+      } catch (error) {
+        console.error('Error creating notification for match', {
+          subscription_id: subscription.id,
+          error: error.message,
+          match: {
+            title: match.title,
+            document_type: match.document_type
+          }
+        });
+        results.errors++;
+      }
+    }
+    
+    return results;
   }
   
-  /** Update the subscription's last processed timestamp */
+  /** Update subscription last check time */
   async _updateSubscriptionStatus(subscriptionId, traceId) {
     try {
       await this.subscriptionRepository.updateLastProcessed(subscriptionId);
-      console.debug('Updated subscription last_processed_at', { subscription_id: subscriptionId });
+      console.debug('Updated subscription last processed time', { subscription_id: subscriptionId });
     } catch (error) {
-      // Log error but don't fail the entire operation just for the status update
-      console.error('Failed to update subscription last_processed_at', { error: error.message });
+      console.error('Failed to update subscription last processed time', {
+        subscription_id: subscriptionId,
+        error: error.message
+      });
+      // Don't fail the whole process for this
     }
   }
 
@@ -306,4 +366,4 @@ class SubscriptionService {
   }
 }
 
-module.exports = SubscriptionService; 
+module.exports = { SubscriptionService }; 
