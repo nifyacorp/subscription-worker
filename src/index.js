@@ -195,64 +195,9 @@ async function startServer() {
         const { parserClient, notificationClient, parserApiKey } = await initializeClients();
         
         // Initialize repositories
-        let subscriptionRepository, notificationRepository, processTrackingRepository;
-
-        if (mockDatabaseMode) {
-            console.info('Creating mock repositories for mock database mode');
-            
-            // Create basic mock implementations
-            subscriptionRepository = {
-                findById: (id) => {
-                    console.debug('MOCK: Finding subscription by ID', { id });
-                    return Promise.resolve({ 
-                        id, 
-                        user_id: 'mock-user', 
-                        name: 'Mock Subscription',
-                        prompts: ['test prompt'],
-                        type_name: 'BOE'
-                    });
-                },
-                updateLastProcessed: (id) => {
-                    console.debug('MOCK: Updating subscription last processed', { id });
-                    return Promise.resolve(true);
-                },
-                findPendingSubscriptions: () => {
-                    console.debug('MOCK: Finding pending subscriptions');
-                    return Promise.resolve([]);
-                }
-            };
-            
-            notificationRepository = {
-                create: (data) => {
-                    console.debug('MOCK: Creating notification', data);
-                    return Promise.resolve({ id: 'mock-notification-id', ...data });
-                },
-                createNotification: (data) => {
-                    console.debug('MOCK: Creating notification from match', data);
-                    return Promise.resolve({ id: 'mock-notification-id', ...data });
-                }
-            };
-            
-            processTrackingRepository = {
-                startProcess: () => {
-                    console.debug('MOCK: Starting process tracking');
-                    return Promise.resolve({ id: 'mock-process-id' });
-                },
-                completeProcess: () => {
-                    console.debug('MOCK: Completing process tracking');
-                    return Promise.resolve(true);
-                },
-                failProcess: () => {
-                    console.debug('MOCK: Marking process as failed');
-                    return Promise.resolve(true);
-                }
-            };
-        } else {
-            // Initialize real repositories
-            subscriptionRepository = new SubscriptionRepository(pool);
-            notificationRepository = new NotificationRepository(pool);
-            processTrackingRepository = new ProcessTrackingRepository(pool);
-        }
+        const subscriptionRepository = new SubscriptionRepository(pool);
+        const notificationRepository = new NotificationRepository(pool);
+        const processTrackingRepository = new ProcessTrackingRepository(pool);
 
         // Initialize service
         const subscriptionService = new SubscriptionService({
