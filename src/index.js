@@ -84,6 +84,7 @@ async function initializeClients() {
     // Initialize parser client
     const parserClient = new ParserClient({});
     await parserClient.initialize();
+    const parserApiKey = parserClient.parserApiKey;
     
     // Initialize notification client
     const pubsubProject = process.env.PROJECT_ID || process.env.GOOGLE_CLOUD_PROJECT;
@@ -92,7 +93,7 @@ async function initializeClients() {
         topicName: process.env.NOTIFICATION_TOPIC || 'subscription-notifications'
     });
     
-    return { parserClient, notificationClient };
+    return { parserClient, notificationClient, parserApiKey };
 }
 
 /**
@@ -191,7 +192,7 @@ async function startServer() {
         }
         
         // Initialize external service clients
-        const { parserClient, notificationClient } = await initializeClients();
+        const { parserClient, notificationClient, parserApiKey } = await initializeClients();
         
         // Initialize repositories
         const subscriptionRepository = new SubscriptionRepository(pool);
@@ -215,7 +216,8 @@ async function startServer() {
         // Collect dependencies needed for routing
         const routeDependencies = {
             pool,
-            subscriptionController
+            subscriptionController,
+            parserApiKey
         };
         console.info('Application components instantiated.');
 
