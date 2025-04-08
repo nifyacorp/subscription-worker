@@ -15,7 +15,7 @@ const {
 
 const { SubscriptionService } = require('./services/SubscriptionService');
 const { SubscriptionController } = require('./controllers/SubscriptionController');
-const { ParserClient } = require('./clients/ParserClient');
+const ParserClient = require('./clients/ParserClient');
 const { NotificationClient } = require('./clients/NotificationClient');
 const { getSecret } = require('./config/secrets');
 const { setupGracefulShutdown } = require('./utils/process-handlers');
@@ -27,7 +27,7 @@ const DEFAULT_PORT = 8080;
 
 // Database connection
 const { Pool } = require('pg');
-const { initDatabaseOptions } = require('./config/database');
+const { createPoolConfig } = require('./config/database');
 
 // Flag for running with mock database (when no DB connection available)
 let mockDatabaseMode = false;
@@ -39,7 +39,7 @@ let server = null;
  */
 async function createDatabasePool() {
     try {
-        const dbOptions = await initDatabaseOptions();
+        const dbOptions = await createPoolConfig();
         console.info('Creating database pool with options:', {
             host: dbOptions.host,
             database: dbOptions.database,
