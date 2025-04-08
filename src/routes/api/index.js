@@ -18,7 +18,7 @@ function createApiRouter(options) {
   const router = express.Router();
   
   // Import route handlers
-  const createHealthRouter = require('../health');
+  const { createHealthRouter } = require('../health');
   const createSubscriptionsRouter = require('./subscriptions');
   const createBOERouter = require('./boe');
   // Removed require: const createDebugRouter = require('./debug');
