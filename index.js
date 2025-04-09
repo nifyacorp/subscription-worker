@@ -122,8 +122,7 @@ function registerRoutes(app, dependencies) {
     const { 
         pool, 
         subscriptionController, 
-        // Add other controllers/services needed for routes
-        // subscriptionService // For debug router if kept
+        subscriptionService // Uncomment this to use for debug router
     } = dependencies;
 
     // Health Check
@@ -139,14 +138,13 @@ function registerRoutes(app, dependencies) {
     logger.debug('Registered API routes under /api.');
 
 
-    // Debug Routes (Conditional) - Requires updating createDebugRouter dependencies
-    // if (process.env.NODE_ENV !== 'production' || process.env.ENABLE_DEBUG_ROUTES === 'true') {
-    //   // Update createDebugRouter to accept necessary dependencies (e.g., service, pool)
-    //   // app.use('/debug', createDebugRouter(subscriptionService, pool)); 
-    //   logger.info('Debug routes registered under /debug.');
-    // } else {
-    //    logger.info('Debug routes are disabled.');
-    // }
+    // Debug Routes - Always enable for now to allow subscription type management
+    logger.info('Enabling debug routes for subscription type management');
+    // Import the debug router
+    const createDebugRouter = require('./src/routes/debug');
+    // Mount debug router at /debug path
+    app.use('/debug', createDebugRouter(subscriptionService, pool));
+    logger.info('Debug routes registered under /debug.');
 
     logger.info('Application routes registered.');
 }
