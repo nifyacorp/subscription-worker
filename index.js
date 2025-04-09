@@ -132,21 +132,25 @@ function registerRoutes(app, dependencies) {
     // API Routes (using the new controller)
     // Assumes createApiRouter takes the controller(s)
     app.use('/api', createApiRouter({ subscriptionController })); 
-    // Note: The original code mounted subscription routes at root and /subscriptions
-    // This needs to be handled within createApiRouter or adjusted based on desired paths.
-    // Example: app.use('/subscriptions', createApiRouter({ subscriptionController }));
     logger.debug('Registered API routes under /api.');
 
 
     // Debug Routes - Always enable for now to allow subscription type management
-    logger.info('Enabling debug routes for subscription type management');
-    // Import the debug router
-    const createDebugRouter = require('./src/routes/debug');
-    // Mount debug router at /debug path
-    app.use('/debug', createDebugRouter(subscriptionService, pool));
-    logger.info('Debug routes registered under /debug.');
+    try {
+      logger.info('Attempting to register debug routes under /debug...');
+      // Import the debug router
+      const createDebugRouter = require('./src/routes/debug');
+      // Mount debug router at /debug path
+      app.use('/debug', createDebugRouter(subscriptionService, pool));
+      logger.info('[SUCCESS] Debug routes SHOULD be registered under /debug.'); // Explicit success log
+    } catch (error) {
+      logger.error({
+          error_message: error.message,
+          error_stack: error.stack
+      }, '[FAILURE] Failed to register debug routes.');
+    }
 
-    logger.info('Application routes registered.');
+    logger.info('Application routes registration process completed.');
 }
 
 function registerErrorHandlers(app) {
