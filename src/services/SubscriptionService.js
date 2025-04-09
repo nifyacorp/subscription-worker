@@ -103,17 +103,36 @@ class SubscriptionService {
 
   /** Fetch subscription data */
   async _getSubscriptionData(subscriptionId, traceId) {
+    console.debug('[DEBUG] Fetching subscription data', { 
+      subscription_id: subscriptionId,
+      trace_id: traceId
+    });
+    
     const subscription = await this.subscriptionRepository.findById(subscriptionId);
     if (!subscription) {
       console.error('Subscription not found', { subscription_id: subscriptionId });
       throw new Error(`Subscription not found: ${subscriptionId}`);
     }
+    
     console.info('Retrieved subscription details', { 
       subscription_id: subscriptionId,
       type_id: subscription.type_id,
       type_name: subscription.type_name,
       parser_url: subscription.parser_url || 'not specified'
     });
+    
+    // Additional debug logging for subscription type information
+    console.debug('[DEBUG] Subscription type details', {
+      subscription_id: subscriptionId,
+      type: {
+        id: subscription.type_id,
+        name: subscription.type_name,
+        parser_url: subscription.parser_url,
+        description: subscription.type_description
+      },
+      trace_id: traceId
+    });
+    
     return subscription;
   }
 
@@ -130,6 +149,16 @@ class SubscriptionService {
       });
       // Fall back to the default parser URL if not specified in subscription_types
     }
+    
+    // Additional debug logging for parser selection based on subscription type
+    console.debug('[DEBUG] Parser selection based on subscription type', {
+      subscription_id: subscription.id,
+      type_name: subscription.type_name,
+      type_id: subscription.type_id,
+      using_type_specific_parser: !!subscription.parser_url,
+      parser_url: subscription.parser_url || 'using default',
+      trace_id: traceId
+    });
     
     // Configure the parser client with the correct URL from subscription_types
     if (subscription.parser_url) {
@@ -151,7 +180,9 @@ class SubscriptionService {
       texts: prompts,
       metadata: {
         user_id: subscription.user_id,
-        subscription_id: subscription.id
+        subscription_id: subscription.id,
+        type_name: subscription.type_name, // Add type_name to metadata for parser
+        trace_id: traceId
       },
       date: new Date().toISOString().split('T')[0] // Use today's date in ISO format
     };
@@ -206,126 +237,101 @@ class SubscriptionService {
     return matches;
   }
   
-  /** Validate and normalize prompts */
+  /** Validate and clean up prompts */
   _validatePrompts(prompts) {
-    if (!prompts || (Array.isArray(prompts) && prompts.length === 0)) {
-      console.warn('No prompts found in subscription, using defaults');
-      return DEFAULT_PROMPTS;
-    }
-    
     // Handle different prompt formats
+    let cleanPrompts = prompts;
+    
+    // If prompts is a string, try to parse it as JSON
     if (typeof prompts === 'string') {
       try {
-        // Try to parse JSON string
-        const parsed = JSON.parse(prompts);
-        if (Array.isArray(parsed)) {
-          return parsed;
-        }
-        // Single string as JSON object
-        return [prompts];
-      } catch (e) {
-        // Not JSON, treat as a single string
-        return [prompts];
+        cleanPrompts = JSON.parse(prompts);
+      } catch (err) {
+        // If it's not valid JSON, use it as a single prompt
+        cleanPrompts = [prompts];
       }
     }
     
-    if (Array.isArray(prompts)) {
-      // Filter out any non-string items and empty strings
-      return prompts
-        .filter(p => typeof p === 'string' && p.trim().length > 0)
-        .map(p => p.trim());
+    // Ensure prompts is an array
+    if (!Array.isArray(cleanPrompts)) {
+      cleanPrompts = cleanPrompts ? [String(cleanPrompts)] : [];
     }
     
-    // Fallback to defaults if none of the above worked
-    console.warn('Could not parse prompts, using defaults');
-    return DEFAULT_PROMPTS;
+    // Filter out empty prompts and trim whitespace
+    cleanPrompts = cleanPrompts
+      .filter(prompt => prompt && typeof prompt === 'string' && prompt.trim().length > 0)
+      .map(prompt => prompt.trim());
+    
+    // Use default prompts if none are provided
+    if (cleanPrompts.length === 0) {
+      console.warn('No valid prompts found, using defaults');
+      return DEFAULT_PROMPTS;
+    }
+    
+    return cleanPrompts;
   }
   
-  /** Create a notification title if one wasn't provided */
-  _generateNotificationTitle(entry) {
-    if (entry.title) {
-      return entry.title;
-    }
+  /** Generate a notification title from a document */
+  _generateNotificationTitle(document) {
+    if (!document) return 'Nueva notificación';
     
-    if (entry.issuing_body && entry.document_type) {
-      return `${entry.document_type} de ${entry.issuing_body}`;
-    }
+    const title = document.title || '';
+    if (title.length <= 60) return title;
     
-    if (entry.document_type) {
-      return `Nuevo ${entry.document_type}`;
-    }
-    
-    return 'Nueva publicación encontrada';
+    return title.substring(0, 57) + '...';
   }
   
-  /** Handle creating and publishing notifications for matches */
+  /** Create and publish notifications for matches */
   async _handleNotifications(subscription, matches, traceId) {
     if (!matches || matches.length === 0) {
-      console.info('No matches to create notifications for', { subscription_id: subscription.id });
+      console.debug('No matches to create notifications for', {
+        subscription_id: subscription.id
+      });
       return { created: 0, errors: 0 };
     }
     
-    console.info('Creating notifications for matches', { 
-      subscription_id: subscription.id, 
-      match_count: matches.length 
+    console.info('Creating notifications for matches', {
+      subscription_id: subscription.id,
+      matches_count: matches.length
     });
     
-    const results = { created: 0, errors: 0 };
+    const results = {
+      created: 0,
+      errors: 0
+    };
     
     for (const match of matches) {
       try {
-        // Create the notification in the database
         const notification = await this.notificationRepository.createNotification({
-          user_id: subscription.user_id,
           subscription_id: subscription.id,
+          user_id: subscription.user_id,
           title: match.notification_title || match.title,
           content: match.summary,
           source_url: match.links?.html || '',
           metadata: {
             document_type: match.document_type,
-            issuing_body: match.issuing_body,
             publication_date: match.publication_date,
-            relevance_score: match.relevance_score,
             prompt: match.prompt,
-            department: match.department,
-            section: match.section,
-            processing_trace_id: traceId
+            relevance_score: match.relevance_score,
+            trace_id: traceId
           }
         });
         
-        console.debug('Created notification', { 
-          notification_id: notification.id, 
-          subscription_id: subscription.id
-        });
-        
-        // Optionally publish to Pub/Sub if configured
-        if (this.notificationClient && this.notificationClient.isEnabled) {
-          try {
-            await this.notificationClient.publishNotification({
-              id: notification.id,
-              user_id: subscription.user_id,
-              subscription_id: subscription.id,
-              title: notification.title,
-              content: notification.content,
-              source_url: notification.source_url,
-              created_at: notification.created_at
-            });
-            
-            console.debug('Published notification event', { 
-              notification_id: notification.id 
-            });
-          } catch (pubsubError) {
-            console.error('Failed to publish notification event', {
-              notification_id: notification.id,
-              error: pubsubError.message
-            });
-            // Don't fail the whole process if pub/sub fails
-          }
+        // Try to publish to notification client if available
+        if (this.notificationClient) {
+          await this.notificationClient.publish({
+            notification_id: notification.id,
+            user_id: subscription.user_id,
+            subscription_id: subscription.id,
+            subscription_type: subscription.type_name,
+            title: notification.title,
+            trace_id: traceId
+          });
         }
         
         results.created++;
       } catch (error) {
-        console.error('Error creating notification for match', {
+        console.error('Error creating notification', {
           subscription_id: subscription.id,
           error: error.message,
           match: {
@@ -340,17 +346,19 @@ class SubscriptionService {
     return results;
   }
   
-  /** Update subscription last check time */
+  /** Update subscription status after processing */
   async _updateSubscriptionStatus(subscriptionId, traceId) {
     try {
       await this.subscriptionRepository.updateLastProcessed(subscriptionId);
-      console.debug('Updated subscription last processed time', { subscription_id: subscriptionId });
+      console.debug('Updated subscription last processed timestamp', {
+        subscription_id: subscriptionId
+      });
     } catch (error) {
-      console.error('Failed to update subscription last processed time', {
+      console.warn('Failed to update subscription status', {
         subscription_id: subscriptionId,
         error: error.message
       });
-      // Don't fail the whole process for this
+      // Don't throw here, as this is just housekeeping
     }
   }
 

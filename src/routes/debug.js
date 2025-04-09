@@ -63,11 +63,57 @@ function createDebugRouter(subscriptionProcessor, pool) {
 
       return res.json({
         status: 'success',
-        processor_type: type,
-        result
+        result: result
       });
     } catch (error) {
-      console.error('Error in test processor endpoint', { error: error.message });
+      console.error('Error in processor test', { 
+        error: error.message,
+        stack: error.stack 
+      });
+      
+      return res.status(500).json({
+        status: 'error',
+        message: error.message
+      });
+    }
+  });
+
+  // New endpoint: Get all subscription types
+  router.get('/subscription-types', async (req, res) => {
+    try {
+      console.debug('Fetching subscription types for debug');
+      
+      const client = await pool.connect();
+      
+      try {
+        // Query for subscription types
+        const result = await client.query(`
+          SELECT 
+            id,
+            name,
+            description,
+            icon,
+            created_at,
+            updated_at,
+            metadata,
+            parser_url
+          FROM subscription_types
+          ORDER BY name ASC
+        `);
+
+        return res.json({
+          status: 'success',
+          count: result.rows.length,
+          subscription_types: result.rows
+        });
+      } finally {
+        client.release();
+      }
+    } catch (error) {
+      console.error('Error fetching subscription types', {
+        error: error.message,
+        stack: error.stack
+      });
 
       return res.status(500).json({
         status: 'error',
@@ -76,33 +122,99 @@ function createDebugRouter(subscriptionProcessor, pool) {
     }
   });
 
-  // Get processor status
-  router.get('/processor-status', (req, res) => {
+  // New endpoint: Insert a subscription type for testing
+  router.post('/subscription-types', async (req, res) => {
     try {
-      const boeProcessor = subscriptionProcessor.boeController;
-      const dogaProcessor = subscriptionProcessor.processorMap['doga'];
+      const { name, description, icon, metadata, parser_url } = req.body;
+      
+      console.info('Inserting subscription type for testing', { name });
 
-      const processorStatuses = {
-        boe: {
-          initialized: !!boeProcessor,
-          has_process_method: boeProcessor ? typeof boeProcessor.processSubscription === 'function' : false,
-          api_url: boeProcessor ? boeProcessor.apiUrl : null,
-          api_key_present: boeProcessor ? !!boeProcessor.apiKey : false
-        },
-        doga: {
-          initialized: !!dogaProcessor,
-          has_process_method: dogaProcessor ? typeof dogaProcessor.processSubscription === 'function' : false,
-          api_url: dogaProcessor ? dogaProcessor.apiUrl : null,
-          api_key_present: dogaProcessor ? !!dogaProcessor.apiKey : false
+      // Basic validation
+      if (!name) {
+        return res.status(400).json({
+          status: 'error',
+          error: 'Name is required'
+        });
+      }
+      
+      const client = await pool.connect();
+      
+      try {
+        // Start transaction
+        await client.query('BEGIN');
+        
+        // Check if a subscription type with this name already exists
+        const checkResult = await client.query(
+          'SELECT id FROM subscription_types WHERE name = $1',
+          [name]
+        );
+        
+        let subscriptionTypeId;
+        
+        if (checkResult.rows.length > 0) {
+          // Update existing subscription type
+          subscriptionTypeId = checkResult.rows[0].id;
+          
+          const result = await client.query(`
+            UPDATE subscription_types
+            SET 
+              description = $1,
+              icon = $2,
+              metadata = $3::jsonb,
+              parser_url = $4,
+              updated_at = NOW()
+            WHERE id = $5
+            RETURNING id, name, description, parser_url
+          `, [
+            description || null,
+            icon || null,
+            JSON.stringify(metadata || {}),
+            parser_url || null,
+            subscriptionTypeId
+          ]);
+          
+          await client.query('COMMIT');
+          
+          return res.json({
+            status: 'success',
+            message: 'Subscription type updated',
+            subscription_type: result.rows[0]
+          });
+        } else {
+          // Insert new subscription type
+          const result = await client.query(`
+            INSERT INTO subscription_types
+            (name, description, icon, metadata, parser_url, created_at, updated_at)
+            VALUES ($1, $2, $3, $4::jsonb, $5, NOW(), NOW())
+            RETURNING id, name, description, parser_url
+          `, [
+            name,
+            description || null,
+            icon || null,
+            JSON.stringify(metadata || {}),
+            parser_url || null
+          ]);
+          
+          await client.query('COMMIT');
+          
+          return res.json({
+            status: 'success',
+            message: 'Subscription type created',
+            subscription_type: result.rows[0]
+          });
         }
-      };
-
-      return res.json({
-        status: 'success',
-        processors: processorStatuses,
-        available_processors: Object.keys(subscriptionProcessor.processorMap)
-      });
+      } catch (error) {
+        await client.query('ROLLBACK');
+        throw error;
+      } finally {
+        client.release();
+      }
     } catch (error) {
+      console.error('Error inserting subscription type', {
+        error: error.message,
+        stack: error.stack
+      });
+
       return res.status(500).json({
         status: 'error',
         error: error.message

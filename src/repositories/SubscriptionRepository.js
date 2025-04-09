@@ -17,6 +17,14 @@ class SubscriptionRepository {
     async findById(subscriptionId) {
         console.debug('Finding subscription by ID', { subscription_id: subscriptionId });
         try {
+            // Log before query execution for debugging
+            console.debug('[DEBUG] Executing query to find subscription with type information', { 
+                subscription_id: subscriptionId,
+                query: `SELECT s.id, s.user_id, s.name, s.prompts, s.frequency, s.last_processed_at, 
+                    t.id as type_id, t.name as type_name, t.parser_url, t.logo_url, t.description as type_description
+                    FROM subscriptions s JOIN subscription_types t ON t.id = s.type_id WHERE s.id = $1`
+            });
+            
             const result = await this.pool.query(
                 `SELECT 
                   s.id, 
@@ -29,7 +37,8 @@ class SubscriptionRepository {
                   t.name as type_name,
                   t.parser_url,
                   t.logo_url,
-                  t.description as type_description
+                  t.description as type_description,
+                  t.metadata as type_metadata
                 FROM subscriptions s 
                 JOIN subscription_types t ON t.id = s.type_id
                 WHERE s.id = $1`,
@@ -38,6 +47,47 @@ class SubscriptionRepository {
             
             if (result.rows.length === 0) {
                 console.warn('No subscription found with ID', { subscription_id: subscriptionId });
+                
+                // Try to get information about the subscription without joining type
+                try {
+                    const subResult = await this.pool.query(
+                        `SELECT id, user_id, name, type_id FROM subscriptions WHERE id = $1`,
+                        [subscriptionId]
+                    );
+                    
+                    if (subResult.rows.length > 0) {
+                        const sub = subResult.rows[0];
+                        console.warn('[DEBUG] Found subscription but no matching type', {
+                            subscription_id: sub.id,
+                            type_id: sub.type_id
+                        });
+                        
+                        // Try to get type information directly
+                        try {
+                            const typeResult = await this.pool.query(
+                                `SELECT id, name FROM subscription_types WHERE id = $1`,
+                                [sub.type_id]
+                            );
+                            
+                            if (typeResult.rows.length === 0) {
+                                console.error('[DEBUG] Subscription type not found in database', {
+                                    subscription_id: sub.id,
+                                    type_id: sub.type_id
+                                });
+                            }
+                        } catch (typeError) {
+                            console.error('[DEBUG] Error looking up subscription type', {
+                                error: typeError.message,
+                                type_id: sub.type_id
+                            });
+                        }
+                    }
+                } catch (subError) {
+                    console.error('[DEBUG] Error looking up subscription details', {
+                        error: subError.message
+                    });
+                }
+                
                 return null;
             }
             
@@ -48,6 +98,15 @@ class SubscriptionRepository {
                 type_id: subscription.type_id,
                 type_name: subscription.type_name,
                 has_parser_url: !!subscription.parser_url
+            });
+            
+            // Additional debug logging for subscription type details
+            console.debug('[DEBUG] Subscription type details', {
+                type_id: subscription.type_id,
+                type_name: subscription.type_name,
+                parser_url: subscription.parser_url || 'not specified',
+                description: subscription.type_description || 'no description',
+                metadata: subscription.type_metadata || {}
             });
             
             return subscription;
