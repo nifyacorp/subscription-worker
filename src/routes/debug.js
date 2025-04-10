@@ -108,12 +108,22 @@ function createDebugRouter(subscriptionService, pool) {
       const client = await pool.connect();
       
       try {
+        // First check if description column exists
+        const columnCheckResult = await client.query(`
+          SELECT column_name 
+          FROM information_schema.columns 
+          WHERE table_name='subscription_types' AND column_name='description'
+        `);
+        
+        // Build the query dynamically based on column existence
+        const hasDescriptionColumn = columnCheckResult.rows.length > 0;
+        
         // Query for subscription types
         const result = await client.query(`
           SELECT 
             id,
             name,
-            description,
+            ${hasDescriptionColumn ? 'description,' : ''}
             icon,
             created_at,
             updated_at,
@@ -162,6 +172,15 @@ function createDebugRouter(subscriptionService, pool) {
       const client = await pool.connect();
       
       try {
+        // First check if description column exists
+        const columnCheckResult = await client.query(`
+          SELECT column_name 
+          FROM information_schema.columns 
+          WHERE table_name='subscription_types' AND column_name='description'
+        `);
+        
+        const hasDescriptionColumn = columnCheckResult.rows.length > 0;
+        
         // Start transaction
         await client.query('BEGIN');
         
@@ -177,23 +196,25 @@ function createDebugRouter(subscriptionService, pool) {
           // Update existing subscription type
           subscriptionTypeId = checkResult.rows[0].id;
           
-          const result = await client.query(`
+          // Build update SQL dynamically based on column existence 
+          const updateSql = `
             UPDATE subscription_types
             SET 
-              description = $1,
-              icon = $2,
-              metadata = $3::jsonb,
-              parser_url = $4,
+              ${hasDescriptionColumn ? 'description = $1,' : ''}
+              icon = $${hasDescriptionColumn ? '2' : '1'},
+              metadata = $${hasDescriptionColumn ? '3' : '2'}::jsonb,
+              parser_url = $${hasDescriptionColumn ? '4' : '3'},
               updated_at = NOW()
-            WHERE id = $5
-            RETURNING id, name, description, parser_url
-          `, [
-            description || null,
-            icon || null,
-            JSON.stringify(metadata || {}),
-            parser_url || null,
-            subscriptionTypeId
-          ]);
+            WHERE id = $${hasDescriptionColumn ? '5' : '4'}
+            RETURNING id, name, ${hasDescriptionColumn ? 'description,' : ''} parser_url
+          `;
+          
+          // Prepare parameters array based on column existence
+          const updateParams = hasDescriptionColumn 
+            ? [description || null, icon || null, JSON.stringify(metadata || {}), parser_url || null, subscriptionTypeId]
+            : [icon || null, JSON.stringify(metadata || {}), parser_url || null, subscriptionTypeId];
+          
+          const result = await client.query(updateSql, updateParams);
           
           await client.query('COMMIT');
           
@@ -203,19 +224,31 @@ function createDebugRouter(subscriptionService, pool) {
             subscription_type: result.rows[0]
           });
         } else {
-          // Insert new subscription type
-          const result = await client.query(`
+          // Insert new subscription type - build SQL dynamically
+          const insertColumns = hasDescriptionColumn 
+            ? 'name, description, icon, metadata, parser_url, created_at, updated_at'
+            : 'name, icon, metadata, parser_url, created_at, updated_at';
+            
+          const insertValues = hasDescriptionColumn
+            ? '($1, $2, $3, $4::jsonb, $5, NOW(), NOW())'
+            : '($1, $2, $3::jsonb, $4, NOW(), NOW())';
+            
+          const insertReturning = hasDescriptionColumn
+            ? 'id, name, description, parser_url'
+            : 'id, name, parser_url';
+            
+          const insertParams = hasDescriptionColumn
+            ? [name, description || null, icon || null, JSON.stringify(metadata || {}), parser_url || null]
+            : [name, icon || null, JSON.stringify(metadata || {}), parser_url || null];
+          
+          const insertSql = `
             INSERT INTO subscription_types
-            (name, description, icon, metadata, parser_url, created_at, updated_at)
-            VALUES ($1, $2, $3, $4::jsonb, $5, NOW(), NOW())
-            RETURNING id, name, description, parser_url
-          `, [
-            name,
-            description || null,
-            icon || null,
-            JSON.stringify(metadata || {}),
-            parser_url || null
-          ]);
+            (${insertColumns})
+            VALUES ${insertValues}
+            RETURNING ${insertReturning}
+          `;
+          
+          const result = await client.query(insertSql, insertParams);
           
           await client.query('COMMIT');
           
