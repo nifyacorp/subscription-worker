@@ -104,6 +104,7 @@ function registerRoutes(app, dependencies) {
     const { 
         pool, 
         subscriptionController, 
+        subscriptionService,
         parserApiKey 
     } = dependencies;
 
@@ -115,13 +116,27 @@ function registerRoutes(app, dependencies) {
     app.use('/api', createApiRouter({ subscriptionController, parserApiKey, pool })); 
     console.debug('Registered API routes under /api.');
 
+    // Debug Routes - Always enable for subscription type management
+    try {
+        console.info('Attempting to register debug routes under /debug...');
+        const createDebugRouter = require('./routes/debug');
+        app.use('/debug', createDebugRouter(subscriptionService, pool));
+        console.info('[SUCCESS] Debug routes registered under /debug.');
+    } catch (error) {
+        console.error('Failed to register debug routes:', {
+            error_message: error.message,
+            error_stack: error.stack
+        });
+    }
+
     // Redirect any legacy paths to the primary API endpoint
     app.use((req, res, next) => {
         // Skip API paths, health checks, or root
         if (req.path.startsWith('/api/') || 
             req.path === '/' || 
             req.path === '/health' || 
-            req.path === '/_health') {
+            req.path === '/_health' ||
+            req.path.startsWith('/debug/')) {
             return next();
         }
         
@@ -217,6 +232,7 @@ async function startServer() {
         const routeDependencies = {
             pool,
             subscriptionController,
+            subscriptionService,
             parserApiKey
         };
         console.info('Application components instantiated.');

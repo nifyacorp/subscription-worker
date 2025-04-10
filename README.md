@@ -1,5 +1,9 @@
 # Subscription Worker Service
 
+## Project Structure Note
+
+**IMPORTANT:** This service uses `src/index.js` as the main entry point, NOT a root-level index.js file. Any changes to route registration or application initialization must be made in `src/index.js`.
+
 ## Overview
 
 The Subscription Worker is a microservice responsible for processing user subscriptions (primarily for BOE documents), matching them against user-defined criteria (prompts), and generating notifications when relevant documents are found. It runs on Google Cloud Run, utilizes PostgreSQL for data persistence, Google Secret Manager for sensitive configuration, and Google Pub/Sub for asynchronous notification publishing.
