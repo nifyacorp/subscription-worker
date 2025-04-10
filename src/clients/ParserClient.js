@@ -10,7 +10,8 @@ class ParserClient {
         this.parserBaseUrl = config.parserBaseUrl || process.env.PARSER_BASE_URL || DEFAULT_PARSER_BASE_URL;
         this.parserApiKey = config.parserApiKey;
         this.isInitialized = false;
-        this.boeClient = null;
+        this.clientType = 'boe'; // Default client type
+        this.client = null;
     }
 
     /**
@@ -31,6 +32,21 @@ class ParserClient {
         
         this.parserBaseUrl = newBaseUrl;
         
+        // Determine client type based on URL (this is a simple heuristic)
+        if (newBaseUrl.includes('boe')) {
+            this.clientType = 'boe';
+        } else if (newBaseUrl.includes('doga')) {
+            this.clientType = 'doga';
+        } else {
+            // Default to generic type, all parsers use the same protocol
+            this.clientType = 'generic';
+        }
+        
+        console.debug('Updated parser client type based on URL', {
+            url: newBaseUrl,
+            client_type: this.clientType
+        });
+        
         // If already initialized, re-initialize with new URL
         if (this.isInitialized) {
             this.isInitialized = false; // Mark as uninitialized
@@ -39,7 +55,7 @@ class ParserClient {
     }
 
     /**
-     * Initializes the underlying BOE parser client, fetching API key if necessary.
+     * Initializes the parser client, fetching API key if necessary.
      * Should be called before making requests.
      */
     async initialize() {
@@ -59,26 +75,38 @@ class ParserClient {
         }
 
         try {
-            this.boeClient = new BoeParserClient({
+            // Initialize the client with the current configuration
+            console.info('Initializing parser client', {
+                base_url: this.parserBaseUrl,
+                client_type: this.clientType,
+                api_key_present: !!this.parserApiKey
+            });
+            
+            // All parser types use the same client protocol
+            this.client = new BoeParserClient({
                 baseURL: this.parserBaseUrl,
                 apiKey: this.parserApiKey,
-                type: 'boe' // Type is set to boe for now, this is for the client's internal type identification
+                type: this.clientType
             });
 
-            console.info('Parser client configured', { 
-                base_url: this.parserBaseUrl, 
+            console.info('Parser client configured successfully', { 
+                base_url: this.parserBaseUrl,
+                client_type: this.clientType,
                 api_key_present: !!this.parserApiKey 
             });
             this.isInitialized = true;
         } catch (error) {
-            console.error('Failed to initialize Parser client', { error: error.message });
+            console.error('Failed to initialize parser client', { 
+                error: error.message,
+                client_type: this.clientType
+            });
             throw error; // Re-throw initialization error
         }
     }
 
     /**
      * Creates a request payload for the parser.
-     * Delegates to the underlying BOE client.
+     * Uses the protocol established by the BOE parser client, which all parsers follow.
      * @param {Array<string>} prompts
      * @param {string} userId
      * @param {string} subscriptionId
@@ -86,43 +114,47 @@ class ParserClient {
      * @returns {Object} The request payload.
      */
     createRequest(prompts, userId, subscriptionId, options) {
-        if (!this.isInitialized || !this.boeClient) {
+        if (!this.isInitialized || !this.client) {
             console.error('ParserClient not initialized. Call initialize() first.');
             throw new Error('ParserClient not initialized.');
         }
-        return this.boeClient.createRequest(prompts, userId, subscriptionId, options);
+        return this.client.createRequest(prompts, userId, subscriptionId, options);
     }
 
     /**
      * Sends a request to the parser service.
-     * Delegates to the underlying BOE client.
      * @param {Object} requestData - The request payload created by createRequest.
      * @returns {Promise<Object>} The parser result.
      */
     async send(requestData) {
-        if (!this.isInitialized || !this.boeClient) {
+        if (!this.isInitialized || !this.client) {
             console.error('ParserClient not initialized. Call initialize() first.');
             throw new Error('ParserClient not initialized.');
         }
 
-        console.debug('Sending request to BOE parser', { 
-            // Avoid logging full request data unless necessary for debugging
-            subscription_id: requestData?.metadata?.subscription_id || 'unknown'
+        console.debug('Sending request to parser', { 
+            client_type: this.clientType,
+            subscription_id: requestData?.metadata?.subscription_id || 'unknown',
+            subscription_type: requestData?.metadata?.type_name || 'unknown'
         }); 
 
         try {
-            const result = await this.boeClient.send(requestData);
-            console.info('Received response from BOE parser', { 
+            const result = await this.client.send(requestData);
+            console.info('Received response from parser', { 
+                client_type: this.clientType,
                 status: result?.status,
                 entries_count: result?.entries?.length || 0,
-                subscription_id: requestData?.metadata?.subscription_id || 'unknown'
+                subscription_id: requestData?.metadata?.subscription_id || 'unknown',
+                subscription_type: requestData?.metadata?.type_name || 'unknown'
             });
             return result;
         } catch (error) {
-             console.error('Error communicating with BOE parser', { 
+             console.error('Error communicating with parser', { 
+                client_type: this.clientType,
                 error: error.message,
                 status: error.response?.status, // Include HTTP status if available
-                subscription_id: requestData?.metadata?.subscription_id || 'unknown'
+                subscription_id: requestData?.metadata?.subscription_id || 'unknown',
+                subscription_type: requestData?.metadata?.type_name || 'unknown'
             });
             throw error; // Re-throw for the service layer
         }

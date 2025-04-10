@@ -53,6 +53,24 @@ class SubscriptionService {
 
       // 1. Fetch Subscription Data
       const subscription = await this._getSubscriptionData(subscriptionId, traceId);
+      
+      // Check if the subscription type has a parser URL
+      if (!subscription.parser_url) {
+        console.info('Skipping subscription with no parser URL', { 
+          subscription_id: subscriptionId, 
+          type_id: subscription.type_id,
+          type_name: subscription.type_name || 'unknown',
+          trace_id: traceId
+        });
+        
+        return {
+          status: 'skipped',
+          subscription_id: subscriptionId,
+          reason: 'no_parser_url',
+          message: 'Subscription type has no parser URL configured',
+          trace_id: traceId
+        };
+      }
 
       // 2. Get Parser Results
       const parserResult = await this._fetchParserResults(subscription, traceId);
@@ -147,32 +165,25 @@ class SubscriptionService {
         type_name: subscription.type_name || 'unknown',
         type_id: subscription.type_id
       });
-      // Fall back to the default parser URL if not specified in subscription_types
+      throw new Error(`No parser URL configured for subscription type: ${subscription.type_id}`);
     }
     
     // Additional debug logging for parser selection based on subscription type
-    console.debug('[DEBUG] Parser selection based on subscription type', {
+    console.debug('[DEBUG] Using parser based on subscription type', {
       subscription_id: subscription.id,
       type_name: subscription.type_name,
       type_id: subscription.type_id,
-      using_type_specific_parser: !!subscription.parser_url,
-      parser_url: subscription.parser_url || 'using default',
+      parser_url: subscription.parser_url,
       trace_id: traceId
     });
     
     // Configure the parser client with the correct URL from subscription_types
-    if (subscription.parser_url) {
-      await this.parserClient.updateBaseURL(subscription.parser_url);
-      console.info('Using parser URL from subscription type', {
-        subscription_id: subscription.id,
-        parser_url: subscription.parser_url,
-        type_name: subscription.type_name
-      });
-    } else {
-      console.warn('Using default parser URL (no type-specific URL found)', {
-        subscription_id: subscription.id
-      });
-    }
+    await this.parserClient.updateBaseURL(subscription.parser_url);
+    console.info('Using parser URL from subscription type', {
+      subscription_id: subscription.id,
+      parser_url: subscription.parser_url,
+      type_name: subscription.type_name
+    });
     
     // Create a standardized request according to the parser protocol
     // All parsers use the same protocol regardless of subscription type
@@ -181,14 +192,16 @@ class SubscriptionService {
       metadata: {
         user_id: subscription.user_id,
         subscription_id: subscription.id,
-        type_name: subscription.type_name, // Add type_name to metadata for parser
+        type_id: subscription.type_id,
+        type_name: subscription.type_name,
         trace_id: traceId
       },
       date: new Date().toISOString().split('T')[0] // Use today's date in ISO format
     };
 
-    console.debug('Sending request to parser', { 
+    console.debug('Sending request to parser for subscription type', { 
       subscription_id: subscription.id,
+      type_id: subscription.type_id,
       parser_url: subscription.parser_url,
       type_name: subscription.type_name,
       prompts: prompts
@@ -198,7 +211,8 @@ class SubscriptionService {
     const parserResult = await this.parserClient.send(requestData);
 
     console.info('Parser processing completed', { 
-      subscription_id: subscription.id, 
+      subscription_id: subscription.id,
+      type_id: subscription.type_id,
       status: parserResult.status,
       entries_count: parserResult.entries?.length || 0 
     });
@@ -364,13 +378,79 @@ class SubscriptionService {
 
   // TODO: Add method for batch processing if needed, e.g., processPendingSubscriptions
   async processPendingSubscriptions() {
-      // This method would likely:
-      // 1. Fetch pending subscription IDs from subscriptionRepository
-      // 2. Loop through IDs, calling processSubscription for each
-      // 3. Aggregate results
-      console.warn('processPendingSubscriptions method is not fully implemented yet.');
-      // Placeholder implementation
-      return { status: 'pending', processed: 0, success_count: 0, error_count: 0 }; 
+    console.info('Processing pending subscriptions...');
+    try {
+        // Get pending subscriptions for all types
+        const pendingSubscriptions = await this.subscriptionRepository.findPendingSubscriptions();
+        
+        console.info(`Found ${pendingSubscriptions.length} pending subscriptions to process`);
+        
+        const results = {
+            status: 'completed',
+            processed: pendingSubscriptions.length,
+            success_count: 0,
+            error_count: 0,
+            skipped_count: 0,
+            by_type: {}
+        };
+        
+        // Process each subscription
+        for (const subscription of pendingSubscriptions) {
+            try {
+                const result = await this.processSubscription(subscription.id);
+                const type_id = subscription.type_id || 'unknown';
+                
+                // Initialize type stats if not present
+                if (!results.by_type[type_id]) {
+                    results.by_type[type_id] = {
+                        success: 0,
+                        error: 0,
+                        skipped: 0
+                    };
+                }
+                
+                if (result.status === 'success') {
+                    results.success_count++;
+                    results.by_type[type_id].success++;
+                } else if (result.status === 'skipped') {
+                    results.skipped_count++;
+                    results.by_type[type_id].skipped++;
+                } else {
+                    results.error_count++;
+                    results.by_type[type_id].error++;
+                }
+            } catch (error) {
+                console.error('Error processing subscription in batch', {
+                    subscription_id: subscription.id,
+                    error: error.message
+                });
+                results.error_count++;
+                
+                const type_id = subscription.type_id || 'unknown';
+                if (!results.by_type[type_id]) {
+                    results.by_type[type_id] = { success: 0, error: 0, skipped: 0 };
+                }
+                results.by_type[type_id].error++;
+            }
+        }
+        
+        console.info('Completed processing pending subscriptions', results);
+        return results;
+    } catch (error) {
+        console.error('Error processing pending subscriptions', {
+            error: error.message,
+            stack: error.stack
+        });
+        return {
+            status: 'error',
+            error: error.message,
+            processed: 0,
+            success_count: 0,
+            error_count: 0,
+            skipped_count: 0,
+            by_type: {}
+        };
+    }
   }
 }
 

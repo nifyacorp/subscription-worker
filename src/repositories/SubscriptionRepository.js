@@ -154,6 +154,7 @@ class SubscriptionRepository {
     async findPendingSubscriptions({ limit = 10, frequency = 'daily' } = {}) {
         try {
             // This query finds subscriptions that haven't been processed recently based on their frequency
+            // No type filter - allow processing of any subscription type
             const result = await this.pool.query(
                 `SELECT s.id, s.user_id, s.name, s.frequency, s.last_processed_at, 
                         t.id as type_id, t.name as type_name, t.parser_url

@@ -6,16 +6,54 @@
 
 ## Overview
 
-The Subscription Worker is a microservice responsible for processing user subscriptions (primarily for BOE documents), matching them against user-defined criteria (prompts), and generating notifications when relevant documents are found. It runs on Google Cloud Run, utilizes PostgreSQL for data persistence, Google Secret Manager for sensitive configuration, and Google Pub/Sub for asynchronous notification publishing.
+The Subscription Worker is a specialized microservice that functions as a subscription processor and router within the NIFYA platform. It acts as the central hub for handling subscription processing requests across various data sources and official bulletins. The service dynamically routes subscription requests to the appropriate parser based on the subscription type configuration stored in the database.
 
-The codebase has been recently refactored to follow a clearer architectural pattern with improved Separation of Concerns (SoC).
+At its core, the Subscription Worker:
+
+1. **Processes subscription requests** from users who want to monitor specific information in official publications and other data sources
+2. **Routes processing requests** to the appropriate specialized parser services based on subscription type (BOE, DOGA, real-estate, etc.)
+3. **Records notifications** when relevant information is found matching user-defined criteria
+4. **Publishes notification events** for real-time updates across the platform
+
+The service is built with flexibility as a priority, allowing the platform to easily add new subscription types and parser services without code modifications. It runs on Google Cloud Run, utilizes PostgreSQL for data persistence, Google Secret Manager for sensitive configuration, and Google Pub/Sub for asynchronous notification publishing.
+
+## How It Works
+
+### Multi-Source Subscription Processing
+
+1. **Subscription Creation**: Users create subscriptions in the NIFYA platform, selecting a subscription type (BOE, DOGA, real-estate, etc.) and specifying search criteria (prompts)
+2. **Processing Request**: The subscription worker receives a processing request, either for a specific subscription ID or as a batch job for all pending subscriptions
+3. **Type Determination**: The worker queries the database to determine the subscription type and retrieves the associated parser URL from the `subscription_types` table
+4. **Dynamic Routing**: Based on the subscription type, the worker dynamically configures its parser client to communicate with the appropriate specialized parser service
+5. **Content Analysis**: The specialized parser service analyzes content sources based on the user's criteria and returns relevant matches
+6. **Notification Creation**: When matches are found, the worker creates notifications in the database and optionally publishes events to Pub/Sub
+7. **Status Update**: The subscription's processing status is updated to reflect the latest processing time and results
+
+### Subscription Types
+
+The system supports multiple subscription types, each configured in the `subscription_types` table with a specific parser URL:
+
+- **BOE (Boletín Oficial del Estado)**: For monitoring Spain's official state bulletin
+- **DOGA (Diario Oficial de Galicia)**: For monitoring Galicia's official regional bulletin
+- **Real Estate**: For monitoring real estate listings and alerts
+- **Custom Types**: Additional types can be added through database configuration without code changes
+
+### Key Features
+
+- **Universal Processing Interface**: Standard API for processing any subscription type
+- **Dynamic Parser Selection**: Automatically routes to the correct parser service based on subscription type
+- **Parser-Agnostic Protocol**: All parser services implement the same standardized communication protocol
+- **Configurable Subscription Types**: New data sources can be added via database configuration
+- **Asynchronous Processing**: Handles both individual and batch processing jobs
+- **Notification Generation**: Creates and distributes notifications across the platform
+- **Comprehensive Tracking**: Monitors and logs processing status and results
 
 ## Features
 
 - Asynchronous processing of individual subscriptions via API endpoint.
 - Batch processing capabilities for pending subscriptions.
 - **Dynamic parser selection** based on subscription type.
-- Integration with an external parser service (e.g., BOE Parser) to analyze documents based on prompts.
+- Integration with specialized parser services to analyze documents based on prompts.
 - Creation of notifications in the database for matched documents.
 - Optional publishing of notification events to a Pub/Sub topic for real-time updates.
 - Dependency Injection for managing component lifecycles and dependencies.
@@ -37,14 +75,16 @@ All parsers accept requests in the following format:
   "texts": ["search term 1", "search term 2"],
   "metadata": {
     "user_id": "UUID",
-    "subscription_id": "UUID"
+    "subscription_id": "UUID",
+    "type_id": "subscription-type",
+    "type_name": "Subscription Type"
   },
   "date": "2025-04-04"  // Optional, defaults to current date
 }
 ```
 
 - **texts**: Array of search terms/prompts to analyze
-- **metadata**: Contains user and subscription identifiers
+- **metadata**: Contains user, subscription, and type identifiers
 - **date**: Optional date to search documents for (defaults to current date)
 
 ### Parser Endpoints
@@ -58,7 +98,7 @@ Example prompt texts include:
 - "Ayuntamiento Barcelona licitaciones" (Barcelona City Council tenders)
 - "Subvenciones cultura" (Culture subsidies/grants)
 
-These prompts are semantically analyzed against official bulletin content to find relevant matches. The parser services process these matches and return detailed match information.
+These prompts are semantically analyzed against content sources to find relevant matches. The parser services process these matches and return detailed match information.
 
 ## Refactored Architecture
 
@@ -66,7 +106,7 @@ The service now follows a more layered architecture:
 
 - **`index.js`**: Application entry point, responsible for initializing components, wiring dependencies, setting up the Express app, and starting the server.
 - **`src/config`**: Modules for configuring database connections, logging, and secrets management.
-- **`src/clients`**: Classes responsible for interacting with external services (e.g., `ParserClient` for the BOE parser, `NotificationClient` for Pub/Sub).
+- **`src/clients`**: Classes responsible for interacting with external services (e.g., `ParserClient` for parser services, `NotificationClient` for Pub/Sub).
 - **`src/repositories`**: Classes encapsulating all database interactions (e.g., `SubscriptionRepository`, `NotificationRepository`, `ProcessTrackingRepository`). They abstract SQL queries and interact directly with the database pool.
 - **`src/services`**: Core business logic resides here (e.g., `SubscriptionService`). Services coordinate actions between repositories and clients to fulfill application use cases.
 - **`src/controllers`**: Classes handling incoming HTTP requests, validating input (basic), calling appropriate service methods, and formatting responses (e.g., `SubscriptionController`).
