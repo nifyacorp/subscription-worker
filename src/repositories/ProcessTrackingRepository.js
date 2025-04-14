@@ -17,9 +17,9 @@ class ProcessTrackingRepository {
         try {
             const result = await this.pool.query(
                 `INSERT INTO subscription_processing
-                 (subscription_id, status) -- Removed metadata and next_run_at columns
-                 VALUES ($1, $2) -- Removed NOW() placeholder for next_run_at
-                 RETURNING id, subscription_id, status, created_at`, // Return key fields
+                 (subscription_id, status, next_run_at, last_run_at)
+                 VALUES ($1, $2, NULL, NULL)
+                 RETURNING id, subscription_id, status, created_at`,
                 [
                     subscriptionId,
                     initialStatus
