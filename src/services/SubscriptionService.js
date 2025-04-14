@@ -38,13 +38,84 @@ class SubscriptionService {
   }
   
   /**
+   * Get detailed information about a subscription for logging and tracking
+   * @param {string} subscriptionId - The ID of the subscription to fetch
+   * @param {Object} [options={}] - Additional options
+   * @returns {Promise<Object>} The subscription details
+   */
+  async getSubscriptionDetails(subscriptionId, options = {}) {
+    try {
+      console.debug('Fetching subscription details for logging purposes', { 
+        subscription_id: subscriptionId,
+        trace_id: options.traceId || 'unspecified'
+      });
+      
+      const subscription = await this.subscriptionRepository.findById(subscriptionId);
+      
+      if (!subscription) {
+        console.warn('Subscription not found when fetching details', { 
+          subscription_id: subscriptionId 
+        });
+        return {
+          subscription_id: subscriptionId,
+          exists: false,
+          error: 'Subscription not found'
+        };
+      }
+      
+      // Prepare a clean object with essential details for logging
+      const subscriptionDetails = {
+        subscription_id: subscription.id,
+        user_id: subscription.user_id,
+        type_id: subscription.type_id,
+        type_name: subscription.type_name,
+        active: subscription.active,
+        has_parser_url: !!subscription.parser_url,
+        last_processed_at: subscription.last_processed_at || null,
+        created_at: subscription.created_at,
+        has_prompts: Array.isArray(subscription.prompts) && subscription.prompts.length > 0,
+        prompts_count: Array.isArray(subscription.prompts) ? subscription.prompts.length : 0
+      };
+      
+      console.debug('Retrieved subscription details successfully', {
+        subscription_id: subscriptionId,
+        user_id: subscriptionDetails.user_id,
+        type_id: subscriptionDetails.type_id
+      });
+      
+      return subscriptionDetails;
+    } catch (error) {
+      console.error('Error fetching subscription details', {
+        subscription_id: subscriptionId,
+        error: error.message,
+        stack: error.stack
+      });
+      
+      // Return a minimal object with error information
+      return {
+        subscription_id: subscriptionId,
+        exists: false,
+        error: error.message,
+        error_code: error.code || 'unknown'
+      };
+    }
+  }
+  
+  /**
    * Process a single subscription by ID
    * @param {string} subscriptionId - The ID of the subscription to process
+   * @param {Object} [options={}] - Additional options like traceId
    * @returns {Promise<Object>} Processing result with status, counts, and traceId
    */
-  async processSubscription(subscriptionId) {
-    const traceId = crypto.randomBytes(8).toString('hex');
-    console.info('Processing subscription', { subscription_id: subscriptionId, trace_id: traceId });
+  async processSubscription(subscriptionId, options = {}) {
+    // Use provided traceId or generate a new one
+    const traceId = options.traceId || crypto.randomBytes(8).toString('hex');
+    
+    console.info('Processing subscription', { 
+      subscription_id: subscriptionId, 
+      trace_id: traceId,
+      request_id: options.requestId || 'unspecified'
+    });
 
     try {
       if (!subscriptionId) {

@@ -295,7 +295,7 @@ class ParserClient {
       throw new Error('ParserClient: Cannot send request - no baseURL set or client not initialized');
     }
     
-    const endpoint = options.endpoint || '/analyze-text';
+    const endpoint = options.endpoint || '/api/analyze-text';
     let retries = 0;
     let lastError = null;
     let timeoutFactor = 1.0;

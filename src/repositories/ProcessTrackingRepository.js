@@ -4,37 +4,103 @@ class ProcessTrackingRepository {
             throw new Error('ProcessTrackingRepository requires a database pool.');
         }
         this.pool = pool;
+        this.maxRetries = 3; // Number of retry attempts for database operations
     }
 
     /**
      * Creates a new processing record for a subscription.
      * @param {string} subscriptionId - The ID of the subscription being processed.
      * @param {string} [initialStatus='pending'] - The initial status.
+     * @param {Object} [subscriptionDetails={}] - Additional details about the subscription.
      * @returns {Promise<Object>} The created processing record (including its ID).
      */
-    async createRecord(subscriptionId, initialStatus = 'pending') {
-        console.debug('Creating processing record', { subscription_id: subscriptionId });
-        try {
-            const result = await this.pool.query(
-                `INSERT INTO subscription_processing
-                 (subscription_id, status)
-                 VALUES ($1, $2)
-                 RETURNING id, subscription_id, status, created_at`,
-                [
-                    subscriptionId,
-                    initialStatus
-                ]
-            );
+    async createRecord(subscriptionId, initialStatus = 'pending', subscriptionDetails = {}) {
+        // Enhanced logging with more details
+        console.debug('Creating processing record', { 
+            subscription_id: subscriptionId,
+            status: initialStatus,
+            details: subscriptionDetails,
+            timestamp: new Date().toISOString()
+        });
 
-            if (result.rowCount === 0) {
-                console.error('Failed to insert processing record', { subscription_id: subscriptionId });
-                throw new Error('Processing record creation failed in DB.');
+        let attempt = 0;
+        let lastError = null;
+
+        while (attempt < this.maxRetries) {
+            try {
+                // Exponential backoff delay between attempts (except first attempt)
+                if (attempt > 0) {
+                    const delay = Math.pow(2, attempt) * 500; // 1s, 2s, 4s
+                    console.info(`Retrying database operation (attempt ${attempt + 1}/${this.maxRetries}) after ${delay}ms delay`, {
+                        subscription_id: subscriptionId,
+                        previous_error: lastError?.message || 'unknown',
+                        error_code: lastError?.code || 'unknown'
+                    });
+                    await new Promise(resolve => setTimeout(resolve, delay));
+                }
+
+                attempt++;
+
+                const result = await this.pool.query(
+                    `INSERT INTO subscription_processing
+                     (subscription_id, status)
+                     VALUES ($1, $2)
+                     RETURNING id, subscription_id, status, created_at`,
+                    [
+                        subscriptionId,
+                        initialStatus
+                    ]
+                );
+
+                if (result.rowCount === 0) {
+                    console.error('Failed to insert processing record', { 
+                        subscription_id: subscriptionId,
+                        attempt: attempt,
+                        max_retries: this.maxRetries
+                    });
+                    throw new Error('Processing record creation failed in DB.');
+                }
+                
+                console.info('Created processing record successfully', { 
+                    processing_id: result.rows[0].id,
+                    subscription_id: subscriptionId,
+                    status: initialStatus,
+                    created_at: result.rows[0].created_at,
+                    attempts_needed: attempt
+                });
+                
+                return result.rows[0];
+            } catch (error) {
+                lastError = error;
+                
+                // Detailed error logging
+                console.error('Error creating processing record in database', { 
+                    subscription_id: subscriptionId,
+                    error: error.message,
+                    error_code: error.code || 'unknown',
+                    error_detail: error.detail || 'none',
+                    attempt: attempt,
+                    max_retries: this.maxRetries,
+                    will_retry: attempt < this.maxRetries,
+                    stack: error.stack
+                });
+                
+                // Check if we should retry based on error type
+                const isRetryableError = 
+                    error.code === 'ECONNRESET' || 
+                    error.code === 'ETIMEDOUT' || 
+                    error.message.includes('timeout') ||
+                    error.message.includes('connection') ||
+                    error.code === '40P01' || // Deadlock
+                    error.code === '57014'; // Query timeout
+                
+                // If it's not a retryable error or we've exhausted retries, throw
+                if (!isRetryableError || attempt >= this.maxRetries) {
+                    throw error;
+                }
+                
+                // Otherwise continue the loop to retry
             }
-            console.info('Created processing record successfully', { processing_id: result.rows[0].id });
-            return result.rows[0];
-        } catch (error) {
-            console.error('Error creating processing record in database', { error: error.message });
-            throw error;
         }
     }
 
