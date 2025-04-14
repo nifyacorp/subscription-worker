@@ -20,7 +20,7 @@ class SubscriptionRepository {
             // Log before query execution for debugging
             console.debug('[DEBUG] Executing query to find subscription with type information', { 
                 subscription_id: subscriptionId,
-                query: `SELECT s.id, s.user_id, s.name, s.prompts, s.frequency, s.last_processed_at, 
+                query: `SELECT s.id, s.user_id, s.name, s.prompts, s.frequency, s.metadata,
                     t.id as type_id, t.name as type_name, t.parser_url, t.logo_url, t.description as type_description
                     FROM subscriptions s JOIN subscription_types t ON t.id = s.type_id WHERE s.id = $1`
             });
@@ -32,7 +32,7 @@ class SubscriptionRepository {
                   s.name, 
                   s.prompts,
                   s.frequency,
-                  s.last_processed_at,
+                  s.metadata,
                   t.id as type_id,
                   t.name as type_name,
                   t.parser_url,
@@ -92,12 +92,21 @@ class SubscriptionRepository {
             }
             
             const subscription = result.rows[0];
+            
+            // Extract last_processed_at from metadata if it exists
+            if (subscription.metadata && subscription.metadata.last_processed_at) {
+                subscription.last_processed_at = subscription.metadata.last_processed_at;
+            } else {
+                subscription.last_processed_at = null;
+            }
+            
             console.debug('Found subscription', { 
                 subscription_id: subscription.id,
                 user_id: subscription.user_id,
                 type_id: subscription.type_id,
                 type_name: subscription.type_name,
-                has_parser_url: !!subscription.parser_url
+                has_parser_url: !!subscription.parser_url,
+                last_processed_at: subscription.last_processed_at
             });
             
             // Additional debug logging for subscription type details
@@ -127,15 +136,24 @@ class SubscriptionRepository {
      */
     async updateLastProcessed(subscriptionId) {
         try {
+            const now = new Date().toISOString();
             await this.pool.query(
                 `UPDATE subscriptions 
-                SET last_processed_at = NOW()
+                SET metadata = jsonb_set(
+                    COALESCE(metadata, '{}'), 
+                    '{last_processed_at}', 
+                    to_jsonb($2::text)
+                ),
+                updated_at = NOW()
                 WHERE id = $1`,
-                [subscriptionId]
+                [subscriptionId, now]
             );
-            console.debug('Updated subscription last_processed_at', { subscription_id: subscriptionId });
+            console.debug('Updated subscription last_processed_at in metadata', { 
+                subscription_id: subscriptionId, 
+                last_processed_at: now 
+            });
         } catch (error) {
-            console.error('Error updating subscription last_processed_at', { 
+            console.error('Error updating subscription last_processed_at in metadata', { 
                 subscription_id: subscriptionId,
                 error: error.message,
                 code: error.code
@@ -154,32 +172,45 @@ class SubscriptionRepository {
     async findPendingSubscriptions({ limit = 10, frequency = 'daily' } = {}) {
         try {
             // This query finds subscriptions that haven't been processed recently based on their frequency
-            // No type filter - allow processing of any subscription type
+            // We're checking if last_processed_at exists in metadata or if it's older than the frequency threshold
             const result = await this.pool.query(
-                `SELECT s.id, s.user_id, s.name, s.frequency, s.last_processed_at, 
+                `SELECT s.id, s.user_id, s.name, s.frequency, s.metadata, 
                         t.id as type_id, t.name as type_name, t.parser_url
                  FROM subscriptions s
                  JOIN subscription_types t ON t.id = s.type_id
                  WHERE s.active = true
                  AND (
-                     s.last_processed_at IS NULL
+                     (s.metadata->>'last_processed_at') IS NULL
                      OR (
-                         s.frequency = 'daily' AND s.last_processed_at < NOW() - INTERVAL '1 day'
+                         s.frequency = 'daily' AND 
+                         (s.metadata->>'last_processed_at')::timestamptz < NOW() - INTERVAL '1 day'
                      )
                      OR (
-                         s.frequency = 'weekly' AND s.last_processed_at < NOW() - INTERVAL '7 days'
+                         s.frequency = 'weekly' AND 
+                         (s.metadata->>'last_processed_at')::timestamptz < NOW() - INTERVAL '7 days'
                      )
                      OR (
-                         s.frequency = 'monthly' AND s.last_processed_at < NOW() - INTERVAL '30 days'
+                         s.frequency = 'monthly' AND 
+                         (s.metadata->>'last_processed_at')::timestamptz < NOW() - INTERVAL '30 days'
                      )
                  )
-                 -- For a specific frequency: AND s.frequency = $1
-                 ORDER BY s.last_processed_at ASC NULLS FIRST
+                 ORDER BY (s.metadata->>'last_processed_at')::timestamptz ASC NULLS FIRST
                  LIMIT $1`,
                 [limit]
             );
             
-            return result.rows;
+            // Process results to add last_processed_at field for compatibility
+            const subscriptions = result.rows.map(sub => {
+                const processedSub = {...sub};
+                if (sub.metadata && sub.metadata.last_processed_at) {
+                    processedSub.last_processed_at = sub.metadata.last_processed_at;
+                } else {
+                    processedSub.last_processed_at = null;
+                }
+                return processedSub;
+            });
+            
+            return subscriptions;
         } catch (error) {
             console.error('Error finding pending subscriptions', { 
                 error: error.message,
