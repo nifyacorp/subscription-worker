@@ -18,7 +18,7 @@ const { SubscriptionController } = require('./controllers/SubscriptionController
 const ParserClient = require('./clients/ParserClient');
 const NotificationClient = require('./clients/NotificationClient');
 const { getSecret } = require('./config/secrets');
-const { setupGracefulShutdown } = require('./utils/process-handlers');
+const { process } = require('./utils');
 const createApiRouter = require('./routes/api/index');
 const { createHealthRouter } = require('./routes/health');
 
@@ -282,7 +282,7 @@ async function startServer() {
             console.info({ port, node_env: process.env.NODE_ENV }, `Server listening on port ${port}`);
         });
         
-        setupGracefulShutdown(server, pool);
+        process.setupGracefulShutdown(server, pool);
         console.info('--- Subscription Worker Started Successfully ---');
 
     } catch (error) {
