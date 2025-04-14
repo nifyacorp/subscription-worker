@@ -20,8 +20,7 @@ function createApiRouter(options) {
   // Import route handlers
   const { createHealthRouter } = require('../health');
   const createSubscriptionsRouter = require('./subscriptions');
-  const createBOERouter = require('./boe');
-  // Removed require: const createDebugRouter = require('./debug');
+  const createBOERouter = require('./boe'); // Use the BOE router from the API folder
   
   // Mount health check route - accessible at /api/health and /api/_health
   router.use(createHealthRouter(pool));
@@ -30,13 +29,8 @@ function createApiRouter(options) {
   const subscriptionsRouter = createSubscriptionsRouter(subscriptionController);
   router.use('/subscriptions', subscriptionsRouter);
   
-  // Mount BOE router - will be eventually deprecated as we move to dynamic parser selection
+  // Mount BOE router - specific to BOE subscription type
   router.use('/boe', createBOERouter(parserApiKey));
-  
-  // Conditionally mount debug routes - COMMENTED OUT
-  // if (process.env.NODE_ENV !== 'production' || process.env.ENABLE_DEBUG_ROUTES === 'true') {
-  //   router.use('/debug', createDebugRouter({ subscriptionProcessor, pool }));
-  // }
   
   // Add root level health check routes
   const healthRouter = createHealthRouter(pool);
@@ -57,11 +51,9 @@ function createApiRouter(options) {
       },
       debug_endpoints: process.env.NODE_ENV !== 'production' || process.env.ENABLE_DEBUG_ROUTES === 'true' 
         ? {
-            '/api/debug': 'Debug API documentation',
-            '/api/debug/status': 'Check service status',
-            '/api/debug/test-processor/:type': 'Test a specific processor',
-            '/api/debug/test-db': 'Test database connection',
-            '/api/debug/logs': 'Get recent application logs'
+            '/debug/status': 'Check service status',
+            '/debug/test-processor/:type': 'Test a specific processor',
+            '/debug/test-db': 'Test database connection'
           }
         : 'Debug endpoints are disabled in production mode',
       documentation: 'For detailed API documentation, see the ENDPOINTS.md file or README.md',

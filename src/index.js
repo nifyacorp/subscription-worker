@@ -140,8 +140,21 @@ function registerRoutes(app, dependencies) {
             return next();
         }
         
-        // Check for legacy process-subscription endpoint
+        // Handle legacy process-subscription endpoint directly 
+        // (no need for a separate legacy router)
         if (req.path.includes('/process-subscription/')) {
+            const parts = req.path.split('/');
+            const idIndex = parts.indexOf('process-subscription') + 1;
+            
+            if (idIndex < parts.length) {
+                const id = parts[idIndex];
+                console.debug(`Redirecting legacy endpoint: ${req.path} -> /api/subscriptions/process/${id}`);
+                return res.redirect(307, `/api/subscriptions/process/${id}`);
+            }
+        }
+
+        // Handle legacy subscriptions/process-subscription endpoint
+        if (req.path.includes('/subscriptions/process-subscription/')) {
             const parts = req.path.split('/');
             const idIndex = parts.indexOf('process-subscription') + 1;
             

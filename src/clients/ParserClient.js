@@ -1,26 +1,28 @@
-const { ParserClient: BoeParserClient } = require('../utils/parser-protocol'); // Renamed to avoid name clash if needed
-const { getSecret } = require('../config/secrets'); // Assuming secrets config is initialized elsewhere
+const { ParserClient: CoreParserClient } = require('../utils/parser-protocol');
+const { getSecret } = require('../config/secrets');
 
-// Constants or configuration values
+// Constants for parser configuration
 const DEFAULT_PARSER_BASE_URL = 'https://boe-parser-415554190254.us-central1.run.app';
 const PARSER_API_KEY_SECRET_NAME = 'PARSER_API_KEY';
 
+/**
+ * ParserClient wrapper that handles automatic initialization and API key retrieval
+ * Delegates most functionality to the core implementation in parser-protocol.js
+ */
 class ParserClient {
-    constructor(config) {
+    constructor(config = {}) {
         this.parserBaseUrl = config.parserBaseUrl || process.env.PARSER_BASE_URL || DEFAULT_PARSER_BASE_URL;
         this.parserApiKey = config.parserApiKey;
         this.isInitialized = false;
-        this.clientType = 'boe'; // Default client type
+        this.clientType = config.clientType || 'boe';
         this.client = null;
     }
 
     /**
      * Updates the base URL of the parser client.
-     * If the client is already initialized, it will be re-initialized with the new URL.
      * @param {string} newBaseUrl - The new base URL to use
      */
     async updateBaseURL(newBaseUrl) {
-        // If no URL is provided or it's the same as current, do nothing
         if (!newBaseUrl || newBaseUrl === this.parserBaseUrl) {
             return;
         }
@@ -32,34 +34,31 @@ class ParserClient {
         
         this.parserBaseUrl = newBaseUrl;
         
-        // Determine client type based on URL (this is a simple heuristic)
+        // Determine client type based on URL
         if (newBaseUrl.includes('boe')) {
             this.clientType = 'boe';
         } else if (newBaseUrl.includes('doga')) {
             this.clientType = 'doga';
         } else {
-            // Default to generic type, all parsers use the same protocol
             this.clientType = 'generic';
         }
         
-        console.debug('Updated parser client type based on URL', {
-            url: newBaseUrl,
-            client_type: this.clientType
-        });
-        
-        // If already initialized, re-initialize with new URL
-        if (this.isInitialized) {
-            this.isInitialized = false; // Mark as uninitialized
-            await this.initialize(); // Re-initialize with new URL
+        if (this.client) {
+            // Use the core client's updateBaseURL method directly
+            await this.client.updateBaseURL(newBaseUrl);
+            console.info('Updated parser client base URL', { new_url: newBaseUrl, client_type: this.clientType });
+        } else if (this.isInitialized) {
+            // If client doesn't exist but we're marked as initialized, re-initialize
+            this.isInitialized = false;
+            await this.initialize();
         }
     }
 
     /**
      * Initializes the parser client, fetching API key if necessary.
-     * Should be called before making requests.
      */
     async initialize() {
-        if (this.isInitialized) {
+        if (this.isInitialized && this.client) {
             return;
         }
 
@@ -69,26 +68,22 @@ class ParserClient {
                 this.parserApiKey = await getSecret(PARSER_API_KEY_SECRET_NAME);
                 console.info('Parser API key retrieved successfully.');
             } catch (error) {
-                console.warn(`Failed to retrieve parser API key (${PARSER_API_KEY_SECRET_NAME}). Parser requests might fail if key is required.`, { error: error.message });
-                this.parserApiKey = null; // Ensure it's null if fetch failed
+                console.warn(`Failed to retrieve parser API key (${PARSER_API_KEY_SECRET_NAME})`, { error: error.message });
+                this.parserApiKey = null;
             }
         }
 
         try {
-            // Initialize the client with the current configuration
-            console.info('Initializing parser client', {
-                base_url: this.parserBaseUrl,
-                client_type: this.clientType,
-                api_key_present: !!this.parserApiKey
-            });
-            
-            // All parser types use the same client protocol
-            this.client = new BoeParserClient({
+            // Initialize the core client with our configuration
+            this.client = new CoreParserClient({
                 baseURL: this.parserBaseUrl,
                 apiKey: this.parserApiKey,
                 type: this.clientType
             });
-
+            
+            // Use the core client's initialize method
+            await this.client.initialize(this.parserApiKey);
+            
             console.info('Parser client configured successfully', { 
                 base_url: this.parserBaseUrl,
                 client_type: this.clientType,
@@ -96,67 +91,49 @@ class ParserClient {
             });
             this.isInitialized = true;
         } catch (error) {
-            console.error('Failed to initialize parser client', { 
-                error: error.message,
-                client_type: this.clientType
-            });
-            throw error; // Re-throw initialization error
+            console.error('Failed to initialize parser client', { error: error.message });
+            throw error;
         }
     }
 
     /**
-     * Creates a request payload for the parser.
-     * Uses the protocol established by the BOE parser client, which all parsers follow.
-     * @param {Array<string>} prompts
-     * @param {string} userId
-     * @param {string} subscriptionId
-     * @param {Object} options - Additional options (limit, date)
-     * @returns {Object} The request payload.
+     * Delegate all parser client methods to the core implementation
      */
-    createRequest(prompts, userId, subscriptionId, options) {
-        if (!this.isInitialized || !this.client) {
-            console.error('ParserClient not initialized. Call initialize() first.');
-            throw new Error('ParserClient not initialized.');
-        }
+
+    /**
+     * Creates a request payload for the parser.
+     */
+    async createRequest(prompts, userId, subscriptionId, options) {
+        await this._ensureInitialized();
         return this.client.createRequest(prompts, userId, subscriptionId, options);
     }
 
     /**
      * Sends a request to the parser service.
-     * @param {Object} requestData - The request payload created by createRequest.
-     * @returns {Promise<Object>} The parser result.
      */
     async send(requestData) {
+        await this._ensureInitialized();
+        return this.client.send(requestData);
+    }
+
+    /**
+     * Ensure client is initialized before use
+     * @private
+     */
+    async _ensureInitialized() {
         if (!this.isInitialized || !this.client) {
-            console.error('ParserClient not initialized. Call initialize() first.');
-            throw new Error('ParserClient not initialized.');
+            await this.initialize();
         }
+    }
 
-        console.debug('Sending request to parser', { 
-            client_type: this.clientType,
-            subscription_id: requestData?.metadata?.subscription_id || 'unknown',
-            subscription_type: requestData?.metadata?.type_name || 'unknown'
-        }); 
-
-        try {
-            const result = await this.client.send(requestData);
-            console.info('Received response from parser', { 
-                client_type: this.clientType,
-                status: result?.status,
-                entries_count: result?.entries?.length || 0,
-                subscription_id: requestData?.metadata?.subscription_id || 'unknown',
-                subscription_type: requestData?.metadata?.type_name || 'unknown'
-            });
-            return result;
-        } catch (error) {
-             console.error('Error communicating with parser', { 
-                client_type: this.clientType,
-                error: error.message,
-                status: error.response?.status, // Include HTTP status if available
-                subscription_id: requestData?.metadata?.subscription_id || 'unknown',
-                subscription_type: requestData?.metadata?.type_name || 'unknown'
-            });
-            throw error; // Re-throw for the service layer
+    /**
+     * Close the client connection
+     */
+    close() {
+        if (this.client) {
+            this.client.close();
+            this.client = null;
+            this.isInitialized = false;
         }
     }
 }
