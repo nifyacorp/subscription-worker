@@ -81,19 +81,37 @@ async function createDatabasePool() {
  * Initialize external service clients
  */
 async function initializeClients() {
-    // Initialize parser client
-    const parserClient = new ParserClient({});
-    await parserClient.initialize();
-    const parserApiKey = parserClient.parserApiKey;
-    
-    // Initialize notification client
-    const pubsubProject = process.env.PROJECT_ID || process.env.GOOGLE_CLOUD_PROJECT;
-    const notificationClient = new NotificationClient({
-        projectId: pubsubProject,
-        topicName: process.env.NOTIFICATION_TOPIC || 'subscription-notifications'
-    });
-    
-    return { parserClient, notificationClient, parserApiKey };
+    try {
+        console.log('[DEBUG initializeClients] Starting client initialization');
+        
+        // Initialize parser client
+        const parserClient = new ParserClient({});
+        await parserClient.initialize();
+        const parserApiKey = parserClient.parserApiKey;
+        
+        console.log('[DEBUG initializeClients] Parser client initialized, setting up notification client');
+        
+        // Initialize notification client
+        // Use globalThis.process to avoid conflicts with the imported 'process' utility
+        const pubsubProject = globalThis.process.env.PROJECT_ID || 
+                              globalThis.process.env.GOOGLE_CLOUD_PROJECT || 
+                              'local-dev-project';
+                              
+        console.log('[DEBUG initializeClients] Using project ID:', pubsubProject);
+        
+        // Create notification client with a project ID - which can be null in development
+        const notificationClient = new NotificationClient({
+            projectId: pubsubProject,
+            topicName: globalThis.process.env.NOTIFICATION_TOPIC || 'subscription-notifications'
+        });
+        
+        console.log('[DEBUG initializeClients] All clients initialized successfully');
+        
+        return { parserClient, notificationClient, parserApiKey };
+    } catch (error) {
+        console.error('[DEBUG initializeClients] Error initializing clients:', error);
+        throw error;
+    }
 }
 
 /**
@@ -215,12 +233,29 @@ async function startServer() {
         
         if (mockDatabaseMode) {
             console.warn('Running in MOCK DATABASE MODE - Limited functionality');
+            // Create a minimal pool object to avoid null errors
+            pool = {
+                query: async () => { 
+                    console.debug('[MOCK DB] Query called, returning empty result');
+                    return { rows: [], rowCount: 0 }; 
+                },
+                connect: async () => {
+                    console.debug('[MOCK DB] Connect called');
+                    return { 
+                        query: async () => ({ rows: [], rowCount: 0 }),
+                        release: () => {} 
+                    };
+                },
+                end: async () => { console.debug('[MOCK DB] End called'); }
+            };
         } else {
             console.info('Database connection established successfully');
         }
         
         // Initialize external service clients
         const { parserClient, notificationClient, parserApiKey } = await initializeClients();
+        
+        console.log('Creating repositories with pool:', !!pool);
         
         // Initialize repositories
         const subscriptionRepository = new SubscriptionRepository(pool);
@@ -277,9 +312,9 @@ async function startServer() {
         registerErrorHandlers(app);
 
         // Start Server
-        const port = process.env.PORT || DEFAULT_PORT;
+        const port = globalThis.process.env.PORT || DEFAULT_PORT;
         server = app.listen(port, () => {
-            console.info({ port, node_env: process.env.NODE_ENV }, `Server listening on port ${port}`);
+            console.info({ port, node_env: globalThis.process.env.NODE_ENV }, `Server listening on port ${port}`);
         });
         
         process.setupGracefulShutdown(server, pool);
@@ -290,7 +325,8 @@ async function startServer() {
             error: error.message, 
             stack: error.stack
         });
-        process.exit(1);
+        // Use global.process instead of process to avoid conflict with the imported process utility
+        globalThis.process.exit(1);
     }
 }
 
@@ -300,5 +336,6 @@ startServer().catch(error => {
         error: error.message, 
         stack: error.stack
     });
-    process.exit(1);
+    // Use global.process instead of process to avoid conflict with the imported process utility
+    globalThis.process.exit(1);
 });
