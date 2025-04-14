@@ -69,10 +69,10 @@ async function createPoolConfig() {
         max: 20,
         min: 2,
         idleTimeoutMillis: 30000,
-        connectionTimeoutMillis: 5000,
+        connectionTimeoutMillis: 30000,
         application_name: 'subscription-processor',
-        statement_timeout: 10000,
-        query_timeout: 10000,
+        statement_timeout: 60000,
+        query_timeout: 60000,
         keepalive: true,
         keepaliveInitialDelayMillis: 10000
       })
@@ -81,9 +81,11 @@ async function createPoolConfig() {
     config.error = (err, client) => {
       console.error({
         error: err,
+        error_code: err.code || 'unknown',
+        error_message: err.message,
+        error_severity: err.severity || 'unknown',
         client_active: !!client,
-        error_code: err.code,
-        error_message: err.message
+        time: new Date().toISOString()
       }, 'Database pool client error');
     };
 
@@ -95,6 +97,8 @@ async function createPoolConfig() {
       min: config.min || 0,
       idleTimeoutMillis: config.idleTimeoutMillis,
       connectionTimeoutMillis: config.connectionTimeoutMillis,
+      statement_timeout: config.statement_timeout,
+      query_timeout: config.query_timeout,
       environment: process.env.NODE_ENV,
       mode: isDevelopment ? 'development' : 'production',
       socketExists: !isDevelopment && process.env.NODE_ENV === 'production' ? 

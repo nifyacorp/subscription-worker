@@ -5,6 +5,15 @@ class ProcessTrackingRepository {
         }
         this.pool = pool;
         this.maxRetries = 3; // Number of retry attempts for database operations
+        console.info('ProcessTrackingRepository initialized', {
+            pool_provided: !!pool,
+            pool_type: typeof pool,
+            pool_stats: pool.totalCount !== undefined ? {
+                total_count: pool.totalCount,
+                idle_count: pool.idleCount,
+                waiting_count: pool.waitingCount
+            } : 'unknown'
+        });
     }
 
     /**
@@ -23,8 +32,30 @@ class ProcessTrackingRepository {
             timestamp: new Date().toISOString()
         });
 
+        // Log pool status before operation
+        console.debug('Database pool status before query', {
+            pool_total: this.pool.totalCount,
+            pool_idle: this.pool.idleCount,
+            pool_waiting: this.pool.waitingCount,
+            subscription_id: subscriptionId
+        });
+
         let attempt = 0;
         let lastError = null;
+
+        // Query to be executed - log it before attempting
+        const queryText = `INSERT INTO subscription_processing
+                            (subscription_id, status)
+                            VALUES ($1, $2)
+                            RETURNING id, subscription_id, status, created_at`;
+        const queryParams = [subscriptionId, initialStatus];
+        
+        console.debug('Preparing to execute SQL query', {
+            query: queryText.replace(/\s+/g, ' ').trim(),
+            params: queryParams,
+            subscription_id: subscriptionId,
+            table: 'subscription_processing'
+        });
 
         while (attempt < this.maxRetries) {
             try {
@@ -40,23 +71,65 @@ class ProcessTrackingRepository {
                 }
 
                 attempt++;
+                
+                // Enhanced timing information
+                const queryStartTime = Date.now();
+                console.debug(`Starting database query execution (attempt ${attempt})`, {
+                    subscription_id: subscriptionId,
+                    time: new Date().toISOString(),
+                    query_timeout: this.pool.options?.query_timeout || 'unknown',
+                    statement_timeout: this.pool.options?.statement_timeout || 'unknown'
+                });
 
-                const result = await this.pool.query(
-                    `INSERT INTO subscription_processing
-                     (subscription_id, status)
-                     VALUES ($1, $2)
-                     RETURNING id, subscription_id, status, created_at`,
-                    [
-                        subscriptionId,
-                        initialStatus
-                    ]
-                );
+                // Check if table exists before executing the query
+                try {
+                    const tableCheck = await this.pool.query(
+                        `SELECT EXISTS (
+                            SELECT FROM information_schema.tables 
+                            WHERE table_schema = 'public' 
+                            AND table_name = 'subscription_processing'
+                        ) as exists`
+                    );
+                    console.debug('Table existence check result', {
+                        table_exists: tableCheck.rows[0]?.exists || false,
+                        check_time_ms: Date.now() - queryStartTime
+                    });
+                    
+                    if (!tableCheck.rows[0]?.exists) {
+                        throw new Error('subscription_processing table does not exist');
+                    }
+                    
+                    // Additional check for connection health
+                    const connectionCheck = await this.pool.query('SELECT 1 as connection_test');
+                    console.debug('Connection health check passed', {
+                        result: connectionCheck.rows[0]?.connection_test === 1,
+                        check_time_ms: Date.now() - queryStartTime
+                    });
+                } catch (checkError) {
+                    console.error('Pre-query check failed', {
+                        error: checkError.message,
+                        code: checkError.code,
+                        stack: checkError.stack
+                    });
+                    // Continue with main query regardless
+                }
+
+                const result = await this.pool.query(queryText, queryParams);
+                
+                const queryEndTime = Date.now();
+                console.debug('Database query completed', {
+                    execution_time_ms: queryEndTime - queryStartTime,
+                    row_count: result.rowCount,
+                    success: true,
+                    subscription_id: subscriptionId
+                });
 
                 if (result.rowCount === 0) {
                     console.error('Failed to insert processing record', { 
                         subscription_id: subscriptionId,
                         attempt: attempt,
-                        max_retries: this.maxRetries
+                        max_retries: this.maxRetries,
+                        execution_time_ms: queryEndTime - queryStartTime
                     });
                     throw new Error('Processing record creation failed in DB.');
                 }
@@ -66,7 +139,8 @@ class ProcessTrackingRepository {
                     subscription_id: subscriptionId,
                     status: initialStatus,
                     created_at: result.rows[0].created_at,
-                    attempts_needed: attempt
+                    attempts_needed: attempt,
+                    execution_time_ms: queryEndTime - queryStartTime
                 });
                 
                 return result.rows[0];
@@ -79,9 +153,19 @@ class ProcessTrackingRepository {
                     error: error.message,
                     error_code: error.code || 'unknown',
                     error_detail: error.detail || 'none',
+                    error_severity: error.severity || 'unknown',
+                    error_hint: error.hint || 'none',
+                    error_position: error.position || 'unknown',
+                    error_table: error.table || 'unknown',
+                    error_constraint: error.constraint || 'none',
                     attempt: attempt,
                     max_retries: this.maxRetries,
                     will_retry: attempt < this.maxRetries,
+                    pool_stats: {
+                        total_count: this.pool.totalCount,
+                        idle_count: this.pool.idleCount,
+                        waiting_count: this.pool.waitingCount
+                    },
                     stack: error.stack
                 });
                 
@@ -147,7 +231,12 @@ class ProcessTrackingRepository {
             console.info('Updated processing record status successfully', { processing_id: processingId, status: status });
             return result.rows[0];
         } catch (error) {
-            console.error('Error updating processing record status in database', { error: error.message });
+            console.error('Error updating processing record status in database', { 
+                error: error.message,
+                error_code: error.code || 'unknown',
+                processing_id: processingId,
+                status: status
+            });
             throw error;
         }
     }
