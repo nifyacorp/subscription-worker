@@ -17,8 +17,8 @@ class ProcessTrackingRepository {
         try {
             const result = await this.pool.query(
                 `INSERT INTO subscription_processing
-                 (subscription_id, status, next_run_at, last_run_at)
-                 VALUES ($1, $2, NULL, NULL)
+                 (subscription_id, status)
+                 VALUES ($1, $2)
                  RETURNING id, subscription_id, status, created_at`,
                 [
                     subscriptionId,
@@ -52,13 +52,17 @@ class ProcessTrackingRepository {
             'status = $1',
             'updated_at = NOW()'
         ];
+        
         let queryParams = [status, processingId];
-
+        
         if (status === 'completed' || status === 'error') {
-            // Using 'completed_at' instead of 'last_run_at' which also doesn't exist.
-            // Assuming 'completed_at' serves a similar purpose of marking final run time.
-            setClauses.push('completed_at = NOW()');
-            // Removed comment referring to next_run_at
+            // Instead of completed_at field, store completion info in metadata
+            setClauses.push(`metadata = jsonb_set(
+                COALESCE(metadata, '{}'),
+                '{completed_at}',
+                to_jsonb($3::text)
+            )`);
+            queryParams.splice(2, 0, new Date().toISOString());
         }
 
         const query = `UPDATE subscription_processing
@@ -107,28 +111,42 @@ class ProcessTrackingRepository {
                     sp.id as processing_id,
                     sp.subscription_id,
                     sp.status,
-                    sp.started_at, -- Added started_at if needed
-                    sp.completed_at, -- Added completed_at instead of last_run_at
-                    sp.error_message, -- Corrected field name from 'error'
+                    sp.metadata,
+                    sp.error as error_message,
                     s.user_id,
-                    s.type_id as subscription_type_id, -- Updated from type for clarity
-                    t.name as type_name, -- Added type name from subscription_types
-                    t.parser_url, -- Added parser URL for type info
+                    s.type_id as subscription_type_id,
+                    t.name as type_name,
+                    t.parser_url,
                     s.active as subscription_active,
                     s.prompts,
-                    s.frequency, -- Added as it might be useful for scheduling
-                    s.last_processed_at as subscription_last_processed_at,
+                    s.frequency,
+                    s.metadata as subscription_metadata,
                     s.created_at as subscription_created_at,
                     s.updated_at as subscription_updated_at
                 FROM subscription_processing sp
                 JOIN subscriptions s ON s.id = sp.subscription_id
-                JOIN subscription_types t ON t.id = s.type_id -- Added join for subscription type details
-                WHERE sp.status = 'pending' -- Or other relevant statuses like 'queued', 'retry'
-                ORDER BY sp.created_at ASC -- Changed order from next_run_at to created_at
+                JOIN subscription_types t ON t.id = s.type_id
+                WHERE sp.status = 'pending'
+                ORDER BY sp.created_at ASC
             `);
             
+            // Process results to add virtual fields for compatibility
+            const records = result.rows.map(record => {
+                // Add last_processed_at from subscription metadata if available
+                if (record.subscription_metadata && record.subscription_metadata.last_processed_at) {
+                    record.subscription_last_processed_at = record.subscription_metadata.last_processed_at;
+                }
+                
+                // Add completed_at from processing record metadata if available
+                if (record.metadata && record.metadata.completed_at) {
+                    record.completed_at = record.metadata.completed_at;
+                }
+                
+                return record;
+            });
+            
             console.info(`Found ${result.rowCount} pending processing records.`);
-            return result.rows;
+            return records;
         } catch (error) {
             console.error('Error fetching pending processing records', { error: error.message });
             throw error;
