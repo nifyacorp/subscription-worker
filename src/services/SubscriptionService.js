@@ -177,7 +177,58 @@ class SubscriptionService {
         trace_id: traceId
       });
       
-      // Consider updating subscription status to 'error' here if appropriate
+      // Update subscription_processing record to 'error' status
+      try {
+        // Find the active processing record for this subscription
+        const query = `
+          SELECT id FROM subscription_processing 
+          WHERE subscription_id = $1 
+          ORDER BY created_at DESC 
+          LIMIT 1
+        `;
+        const client = await this.subscriptionRepository.pool.connect();
+        const result = await client.query(query, [subscriptionId]);
+        
+        if (result.rows.length > 0) {
+          const processingId = result.rows[0].id;
+          const errorStatus = 'error';
+          
+          // Update the processing record with error status and details
+          const updateQuery = `
+            UPDATE subscription_processing 
+            SET status = $1, 
+                error = $2,
+                updated_at = NOW(),
+                metadata = jsonb_set(
+                  COALESCE(metadata, '{}'), 
+                  '{error_at}', 
+                  to_jsonb($3::text)
+                )
+            WHERE id = $4
+          `;
+          await client.query(updateQuery, [
+            errorStatus, 
+            error.message, 
+            new Date().toISOString(), 
+            processingId
+          ]);
+          
+          console.info('Updated subscription processing record to error state', {
+            subscription_id: subscriptionId,
+            processing_id: processingId,
+            error: error.message,
+            trace_id: traceId
+          });
+        }
+        client.release();
+      } catch (updateError) {
+        console.warn('Failed to update subscription processing error status', {
+          subscription_id: subscriptionId,
+          error: updateError.message,
+          original_error: error.message,
+          trace_id: traceId
+        });
+      }
       
       return {
         status: 'error',
@@ -255,6 +306,60 @@ class SubscriptionService {
       parser_url: subscription.parser_url,
       type_name: subscription.type_name
     });
+    
+    // Update subscription_processing record with the parser information
+    try {
+      // Find the active processing record for this subscription
+      const query = `
+        SELECT id FROM subscription_processing 
+        WHERE subscription_id = $1 
+        ORDER BY created_at DESC 
+        LIMIT 1
+      `;
+      const client = await this.subscriptionRepository.pool.connect();
+      const result = await client.query(query, [subscription.id]);
+      
+      if (result.rows.length > 0) {
+        const processingId = result.rows[0].id;
+        const processingStatus = `Processing in ${subscription.type_id}`;
+        const metadata = JSON.stringify({
+          parser_url: subscription.parser_url,
+          parser_type: subscription.type_id,
+          parser_name: subscription.type_name,
+          processing_started_at: new Date().toISOString()
+        });
+        
+        // Update the processing record with the new status and metadata
+        const updateQuery = `
+          UPDATE subscription_processing 
+          SET status = $1, 
+              metadata = $2::jsonb, 
+              updated_at = NOW() 
+          WHERE id = $3
+        `;
+        await client.query(updateQuery, [processingStatus, metadata, processingId]);
+        
+        console.info('Updated subscription processing record', {
+          subscription_id: subscription.id,
+          processing_id: processingId,
+          status: processingStatus,
+          trace_id: traceId
+        });
+      } else {
+        console.warn('No processing record found for subscription', {
+          subscription_id: subscription.id,
+          trace_id: traceId
+        });
+      }
+      client.release();
+    } catch (error) {
+      console.error('Error updating subscription processing record', {
+        subscription_id: subscription.id,
+        error: error.message,
+        trace_id: traceId
+      });
+      // Don't throw error here to allow processing to continue
+    }
     
     // Create a standardized request according to the parser protocol
     // All parsers use the same protocol regardless of subscription type
@@ -438,6 +543,57 @@ class SubscriptionService {
       console.debug('Updated subscription last processed timestamp', {
         subscription_id: subscriptionId
       });
+      
+      // Update the subscription_processing record to 'completed'
+      try {
+        // Find the active processing record for this subscription
+        const query = `
+          SELECT id, status FROM subscription_processing 
+          WHERE subscription_id = $1 
+          ORDER BY created_at DESC 
+          LIMIT 1
+        `;
+        const client = await this.subscriptionRepository.pool.connect();
+        const result = await client.query(query, [subscriptionId]);
+        
+        if (result.rows.length > 0) {
+          const processingId = result.rows[0].id;
+          const currentStatus = result.rows[0].status;
+          const completedStatus = 'completed';
+          
+          // Only update if the status indicates it's still processing
+          if (currentStatus.startsWith('Processing')) {
+            const updateQuery = `
+              UPDATE subscription_processing 
+              SET status = $1, 
+                  updated_at = NOW(),
+                  metadata = jsonb_set(
+                    COALESCE(metadata, '{}'), 
+                    '{completed_at}', 
+                    to_jsonb($2::text)
+                  )
+              WHERE id = $3
+            `;
+            await client.query(updateQuery, [completedStatus, new Date().toISOString(), processingId]);
+            
+            console.info('Updated subscription processing record to completed', {
+              subscription_id: subscriptionId,
+              processing_id: processingId,
+              previous_status: currentStatus,
+              new_status: completedStatus,
+              trace_id: traceId
+            });
+          }
+        }
+        client.release();
+      } catch (processingError) {
+        console.warn('Failed to update subscription processing status', {
+          subscription_id: subscriptionId,
+          error: processingError.message,
+          trace_id: traceId
+        });
+        // Don't throw here, as this is just housekeeping
+      }
     } catch (error) {
       console.warn('Failed to update subscription status', {
         subscription_id: subscriptionId,
