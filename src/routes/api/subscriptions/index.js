@@ -54,6 +54,17 @@ function createSubscriptionsRouter(subscriptionController) {
   );
   console.debug('Registered POST /batch/process');
   
+  /**
+   * POST /api/subscriptions/process-all
+   * Process all pending subscriptions.
+   * This endpoint is designed to be called by a Cloud Scheduler job.
+   */
+  router.post(
+    '/process-all',
+    subscriptionController.processBatchSubscriptions // Reuse the batch processing method
+  );
+  console.debug('Registered POST /process-all');
+  
   console.info('Subscription API routes registered successfully');
   return router;
 }
