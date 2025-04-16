@@ -21,6 +21,7 @@ const { getSecret } = require('./config/secrets');
 const { process } = require('./utils');
 const createApiRouter = require('./routes/api/index');
 const { createHealthRouter } = require('./routes/health');
+const processRouter = require('./routes/process'); // Import the new process router
 
 // Constants
 const DEFAULT_PORT = 8080;
@@ -130,6 +131,10 @@ function registerRoutes(app, dependencies) {
     app.use(createHealthRouter(pool));
     console.debug('Registered health routes.');
 
+    // Process Route - For backend scheduler integration
+    app.use(processRouter);
+    console.debug('Registered process route for scheduler integration.');
+
     // Primary API Routes
     app.use('/api', createApiRouter({ subscriptionController, parserApiKey, pool })); 
     console.debug('Registered API routes under /api.');
@@ -154,7 +159,8 @@ function registerRoutes(app, dependencies) {
             req.path === '/' || 
             req.path === '/health' || 
             req.path === '/_health' ||
-            req.path.startsWith('/debug/')) {
+            req.path.startsWith('/debug/') ||
+            req.path === '/process') { // Add process to the exclusion list
             return next();
         }
         

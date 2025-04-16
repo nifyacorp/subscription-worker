@@ -47,7 +47,8 @@ function createApiRouter(options) {
         '/api/subscriptions/process/:id': 'Process a subscription',
         '/api/subscriptions/pending': 'List pending subscriptions',
         '/api/subscriptions/batch/process': 'Process subscriptions in batch',
-        '/api/boe/process': 'Process BOE-specific subscription'
+        '/api/boe/process': 'Process BOE-specific subscription',
+        '/process': 'Process a subscription (for backend scheduler)'
       },
       debug_endpoints: process.env.NODE_ENV !== 'production' || process.env.ENABLE_DEBUG_ROUTES === 'true' 
         ? {
